@@ -211,20 +211,63 @@ struct SettingsView: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
+    @State private var showAprsSquelchInfo = false
+
+    private let aprsFrequencies = ["Current", "144.3900", "144.5750", "144.6400", "144.6600", "144.8000", "145.1750", "145.8250"]
+    private let aprsFrequencyLabels = [
+        "Current",
+        "144.3900 (Americas)",
+        "144.5750 (New Zealand)",
+        "144.6400 (Japan)",
+        "144.6600 (Australia)",
+        "144.8000 (Europe/Africa)",
+        "145.1750 (Australia, alt)",
+        "145.8250 (ISS/satellite)",
+    ]
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 4) {
                     // APRS
-                    ListGroupView(
-                        header: "APRS",
-                        footer: "Silencing requires an APRS frequency set in Beacon settings (not \"Current\")."
-                    ) {
+                    ListGroupView(header: "APRS") {
                         TextFieldRow(title: "Callsign",  text: $store.callsign,  placeholder: "N0CALL", isLast: false)
-                        TextFieldRow(title: "APRS SSID", text: $store.aprsSSID,  placeholder: "–9",     isLast: false, autocap: .never)
-                        ListRow(title: "Silence audio on APRS frequency", isLast: true, dense: true,
-                                accessory: KVToggle(isOn: $store.silenceRxOnAprsFreq) as (any View))
+                        TextFieldRow(title: "APRS SSID", text: $store.aprsSSID,  placeholder: "Optional", isLast: false, autocap: .never)
+                        PickerRow(title: "APRS frequency",
+                                  selection: $store.aprsBeaconFrequency,
+                                  options: aprsFrequencies,
+                                  labels: aprsFrequencyLabels,
+                                  isLast: false)
+                        HStack(spacing: 0) {
+                            ListRow(title: "Silence audio on APRS freq", isLast: true, dense: true,
+                                    accessory: KVToggle(isOn: $store.silenceRxOnAprsFreq) as (any View))
+                            Button { showAprsSquelchInfo = true } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(t.accent)
+                            }
+                            .padding(.trailing, 16)
+                            .popover(isPresented: $showAprsSquelchInfo) {
+                                Text("When tuned to your APRS frequency, squelch is automatically opened so APRS packets can always be decoded. Enable this to mute the audio so you don't hear packet noise.")
+                                    .font(.system(size: 14))
+                                    .padding()
+                                    .frame(width: 280)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .presentationCompactAdaptation(.popover)
+                            }
+                        }
+                    }
+
+                    // Notifications
+                    ListGroupView(header: "Notifications") {
+                        NavigationLink {
+                            APRSNotificationsView(store: store)
+                        } label: {
+                            ListRow(title: "APRS notifications",
+                                    value: store.aprsNotify.enabled ? "On" : "Off",
+                                    isLast: true)
+                        }
+                        .buttonStyle(.plain)
                     }
 
                     // Radio
@@ -408,6 +451,9 @@ private struct SquelchSliderRow: View {
                         .onChanged { v in
                             let pct = max(0, min(1, v.location.x / geo.size.width))
                             store.squelch = UInt8(round(pct * 9.0))
+                        }
+                        .onEnded { _ in
+                            store.radio.setSquelch(store.isTunedToAprsFreq ? 0 : store.squelch)
                         }
                 )
             }
@@ -594,17 +640,6 @@ struct BeaconSettingsView: View {
     ]
 
     private let intervals = [5, 10, 15, 30, 60]
-    private let frequencies = ["Current", "144.3900", "144.5750", "144.6400", "144.6600", "144.8000", "145.1750", "145.8250"]
-    private let frequencyLabels = [
-        "Current",
-        "144.3900 (Americas)",
-        "144.5750 (New Zealand)",
-        "144.6400 (Japan)",
-        "144.6600 (Australia)",
-        "144.8000 (Europe/Africa)",
-        "145.1750 (Australia, alt)",
-        "145.8250 (ISS/satellite)",
-    ]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -612,7 +647,7 @@ struct BeaconSettingsView: View {
                 VStack(spacing: 4) {
                     ListGroupView(
                         header: "Position beacon",
-                        footer: "Periodically transmits your GPS position via APRS. Requires a callsign in Settings. Beaconing only runs while the app is open."
+                        footer: "Periodically transmits your GPS position via APRS. Requires a callsign and APRS frequency configured in Settings. Beaconing only runs while the app is open."
                     ) {
                         ListRow(title: "Beacon position", isLast: false, dense: true,
                                 accessory: KVToggle(isOn: $store.aprsBeaconEnabled) as (any View))
@@ -621,11 +656,6 @@ struct BeaconSettingsView: View {
                                       get: { "\(store.aprsBeaconIntervalMin) min" },
                                       set: { store.aprsBeaconIntervalMin = Int($0.dropLast(4)) ?? 15 }),
                                   options: intervals.map { "\($0) min" },
-                                  isLast: false)
-                        PickerRow(title: "Frequency",
-                                  selection: $store.aprsBeaconFrequency,
-                                  options: frequencies,
-                                  labels: frequencyLabels,
                                   isLast: false)
                         ListRow(title: "Approximate position", isLast: true, dense: true,
                                 accessory: KVToggle(isOn: $store.aprsPositionApprox) as (any View))
@@ -795,5 +825,121 @@ private struct DeviceDetailRow: View {
                 Divider().padding(.leading, 16).background(t.sep)
             }
         }
+    }
+}
+
+// MARK: - APRS notifications settings
+
+struct APRSNotificationsView: View {
+    @Environment(\.theme) var t
+    @Bindable var store: RadioStore
+    @State private var authDenied = false
+
+    // Display order for the per-kind toggles.
+    private static let kinds: [APRSPacketKind] =
+        [.message, .bulletin, .position, .weather, .object, .raw]
+
+    private static let distanceOptions = ["Off", "10 mi", "25 mi", "50 mi"]
+    private static let cooldownOptions = ["1 min", "5 min", "10 min", "15 min"]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 4) {
+                    ListGroupView(
+                        footer: authDenied
+                            ? "Notifications are turned off for kv4p HT. Enable them in iOS Settings › Notifications."
+                            : "Packets arrive while the app runs in the background (connected via Bluetooth)."
+                    ) {
+                        ListRow(title: "Notify on APRS packets", isLast: true, dense: true,
+                                accessory: KVToggle(isOn: Binding(
+                                    get: { store.aprsNotify.enabled },
+                                    set: { on in
+                                        if on {
+                                            store.notifications.requestAuthorization { granted in
+                                                authDenied = !granted
+                                                store.aprsNotify.enabled = granted
+                                            }
+                                        } else {
+                                            store.aprsNotify.enabled = false
+                                        }
+                                    })) as (any View))
+                    }
+
+                    ListGroupView(header: "Packet types") {
+                        ForEach(Array(Self.kinds.enumerated()), id: \.element) { i, kind in
+                            ListRow(title: kind.label, isLast: i == Self.kinds.count - 1, dense: true,
+                                    accessory: KVToggle(isOn: kindBinding(kind)) as (any View))
+                        }
+                    }
+                    .disabled(!store.aprsNotify.enabled)
+                    .opacity(store.aprsNotify.enabled ? 1 : 0.4)
+
+                    ListGroupView(
+                        header: "Filters",
+                        footer: "Floods are tamed: repeated beacons from the same station are suppressed for the cooldown. Messages addressed to you always notify."
+                    ) {
+                        ListRow(title: "Only messages addressed to me", isLast: false, dense: true,
+                                accessory: KVToggle(isOn: $store.aprsNotify.onlyMessagesToMe) as (any View))
+                        PickerRow(title: "Within distance",
+                                  selection: distanceBinding,
+                                  options: Self.distanceOptions, isLast: false)
+                        PickerRow(title: "Beacon cooldown",
+                                  selection: cooldownBinding,
+                                  options: Self.cooldownOptions, isLast: true)
+                    }
+                    .disabled(!store.aprsNotify.enabled)
+                    .opacity(store.aprsNotify.enabled ? 1 : 0.4)
+
+                    ListGroupView(
+                        header: "Live activity",
+                        footer: "Shows live monitoring status (last station heard + packet count) on the Lock Screen and Dynamic Island while connected."
+                    ) {
+                        ListRow(title: "Show live activity", isLast: true, dense: true,
+                                accessory: KVToggle(isOn: $store.aprsNotify.liveActivityEnabled) as (any View))
+                    }
+
+                    if !store.aprsNotify.mutedCallsigns.isEmpty {
+                        ListGroupView(header: "Muted stations") {
+                            let muted = store.aprsNotify.mutedCallsigns.sorted()
+                            ForEach(Array(muted.enumerated()), id: \.element) { i, call in
+                                ListRow(title: call, value: "Unmute",
+                                        showChevron: false, isLast: i == muted.count - 1, dense: true)
+                                    .onTapGesture { store.aprsNotify.mutedCallsigns.remove(call) }
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .background(t.bg.ignoresSafeArea())
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            store.notifications.authorizationStatus { status in
+                authDenied = store.aprsNotify.enabled && status == .denied
+            }
+        }
+    }
+
+    private func kindBinding(_ k: APRSPacketKind) -> Binding<Bool> {
+        Binding(get: { store.aprsNotify.kindEnabled(k) },
+                set: { store.aprsNotify.perKind[k.rawValue] = $0 })
+    }
+
+    private var distanceBinding: Binding<String> {
+        Binding(
+            get: {
+                guard let mi = store.aprsNotify.distanceFilterMi else { return "Off" }
+                return "\(Int(mi)) mi"
+            },
+            set: { store.aprsNotify.distanceFilterMi = Double($0.dropLast(3)) })  // nil for "Off"
+    }
+
+    private var cooldownBinding: Binding<String> {
+        Binding(
+            get: { "\(Int(store.aprsNotify.cooldownSec / 60)) min" },
+            set: { store.aprsNotify.cooldownSec = (Double($0.dropLast(4)) ?? 5) * 60 })
     }
 }

@@ -253,6 +253,7 @@ private struct RadioStage: View {
                         editable: true,
                         onEnded: { pct in
                             store.squelch = UInt8(round(pct * 9.0))
+                            store.radio.setSquelch(store.isTunedToAprsFreq ? 0 : store.squelch)
                         }
                     )
                     HStack(spacing: 8) {

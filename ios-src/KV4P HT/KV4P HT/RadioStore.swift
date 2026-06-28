@@ -128,7 +128,6 @@ class RadioStore {
             if !isInitializing && !isApplyingDeviceStateToUI {
                 UserDefaults.standard.set(Int(squelch), forKey: Self.squelchKey)
                 ble.setRxAudioMuted(effectiveRxMuted)
-                radio.setSquelch(squelch)
             }
         }
     }
@@ -196,6 +195,16 @@ class RadioStore {
             }
         }
     }
+
+    // ── APRS notifications
+    let notifications = NotificationManager()
+    @ObservationIgnored let liveActivity = LiveActivityManager()
+    var aprsNotify = APRSNotifySettings() {
+        didSet { if !isInitializing { saveNotifySettings() } }
+    }
+    // Set when a notification's "Open Map" action fires; ContentView switches to
+    // the Map tab and MapView centers on this entry, then clears it.
+    var pendingMapFocusID: UUID? = nil
 
     // ── Recordings
     var recordings: [Recording] = []
@@ -269,6 +278,7 @@ class RadioStore {
             ]
         }
         loadAprsSettings()
+        loadNotifySettings()
         if let raw = UserDefaults.standard.string(forKey: Self.themeModeKey),
            let mode = AppThemeMode(rawValue: raw) {
             themeMode = mode
@@ -280,6 +290,17 @@ class RadioStore {
         configureSpeechManager()
 
         aprs.store = self
+        aprs.notifier = notifications
+        notifications.configure()
+        notifications.onReply = { [weak self] to, text in
+            DispatchQueue.main.async { _ = self?.aprs.sendMessage(to: to, text: text) }
+        }
+        notifications.onMute = { [weak self] base in
+            DispatchQueue.main.async { self?.aprsNotify.mutedCallsigns.insert(base) }
+        }
+        notifications.onOpen = { [weak self] entryID, _, _ in
+            DispatchQueue.main.async { self?.pendingMapFocusID = entryID }
+        }
         ble.onAx25Frame = { [weak self] data in
             DispatchQueue.main.async { self?.aprs.handleAx25Frame(data) }
         }
@@ -295,7 +316,6 @@ class RadioStore {
                 self.aprs.processDueRetries()
             }
         }
-        // Keep UI controls in sync with the firmware-applied radio config.
         ble.onDeviceState = { [weak self] _ in
             guard let self else { return }
             self.hydrateUISettingsFromAppliedState()
@@ -306,6 +326,7 @@ class RadioStore {
 
     private static let themeModeKey = "themeMode"
     private static let aprsSettingsKey = "aprsSettings"
+    private static let notifySettingsKey = "aprsNotifySettings"
     private static let squelchKey = "squelchLevel"
 
     private struct APRSSettings: Codable {
@@ -340,6 +361,17 @@ class RadioStore {
             silenceRxOnAprsFreq: silenceRxOnAprsFreq)
         guard let data = try? JSONEncoder().encode(s) else { return }
         UserDefaults.standard.set(data, forKey: Self.aprsSettingsKey)
+    }
+
+    private func loadNotifySettings() {
+        guard let data = UserDefaults.standard.data(forKey: Self.notifySettingsKey),
+              let s = try? JSONDecoder().decode(APRSNotifySettings.self, from: data) else { return }
+        aprsNotify = s
+    }
+
+    private func saveNotifySettings() {
+        guard let data = try? JSONEncoder().encode(aprsNotify) else { return }
+        UserDefaults.standard.set(data, forKey: Self.notifySettingsKey)
     }
 
     private func hydrateUISettingsFromAppliedState() {
@@ -456,20 +488,19 @@ class RadioStore {
         memory(for: currentFreq)?.id
     }
 
-    // Applied squelch state reported by firmware. This drives RX/IDLE status,
-    // caption transitions, and local audio muting.
     var isSquelched: Bool {
         guard let ds = ble.deviceState else { return true }
         return (ds.flags & DEVICE_STATE_SQUELCHED) != 0
     }
 
-    // True when the user has opted to silence RX audio while tuned to their
-    // configured APRS frequency (so packet bursts aren't heard as noise).
-    var isOnAprsFreq: Bool {
-        guard silenceRxOnAprsFreq,
-              aprsBeaconFrequency != "Current",
+    var isTunedToAprsFreq: Bool {
+        guard aprsBeaconFrequency != "Current",
               let aprsFreq = Float(aprsBeaconFrequency) else { return false }
         return abs(currentFreq - aprsFreq) < 0.0005
+    }
+
+    var isOnAprsFreq: Bool {
+        silenceRxOnAprsFreq && isTunedToAprsFreq
     }
 
     var effectiveRxMuted: Bool {
@@ -502,6 +533,12 @@ class RadioStore {
         ble.setAudioSampleHook(nil)
         speechManager.endSegment()
         wasSquelched = true
+        // Ensure a monitoring Live Activity exists if we're connected — covers
+        // the case where the link was already up before the activity could start
+        // (start() is idempotent). It then renders on the Lock Screen.
+        if ble.bleState == .ready {
+            liveActivity.start(enabled: aprsNotify.liveActivityEnabled)
+        }
     }
 
     func enterForeground() {
@@ -578,7 +615,7 @@ class RadioStore {
         radio.beginUpdate()
         radio.setTxFrequency(rxFreq + (simplexOverride ? 0 : vfoOffset))
         radio.setRxFrequency(rxFreq)
-        radio.setSquelch(squelch)
+        radio.setSquelch(isTunedToAprsFreq ? 0 : squelch)
         radio.setBandwidth(bandwidth == 0 ? DRA818_25K : DRA818_12K5)
         radio.setTxTone(simplexOverride ? 0 : vfoToneIndex)
         radio.setFilters(emphasis: filterPreemphasis, highpass: filterHighPass, lowpass: filterLowPass)
