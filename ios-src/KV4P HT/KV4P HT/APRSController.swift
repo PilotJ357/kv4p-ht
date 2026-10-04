@@ -591,12 +591,11 @@ class APRSController {
             symbolTable: "/", symbolCode: String(symbol), isOutgoing: true))
 
         if let freq = beaconFreq {
-            let originalFreq = store.currentFreq
-            store.sendRadioState(freq: freq, simplexOverride: true)
-            try? await Task.sleep(for: .milliseconds(500))
-            transmitPayload(payload)
-            try? await Task.sleep(for: .seconds(4))
-            store.sendRadioState(freq: originalFreq)
+            await store.withSimplexFrequency(freq) {
+                try? await Task.sleep(for: .milliseconds(500))
+                transmitPayload(payload)
+                try? await Task.sleep(for: .seconds(4))
+            }
         } else {
             transmitPayload(payload)
         }
