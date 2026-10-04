@@ -360,6 +360,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 radio.beginUpdate()
                 radio.markTransportReady()
                 radio.setTxAllowed(true)
+                radio.disableHardwareDeemphasis()
                 radio.openAudio()  // ESP32 won't stream audio until RX_AUDIO_OPEN is set
                 radio.endUpdate()
                 onTransportReady?()

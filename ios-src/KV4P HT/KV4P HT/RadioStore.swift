@@ -228,24 +228,17 @@ class RadioStore {
             }
         }
     }
-    var filterPreemphasis: Bool = true {
-        didSet {
-            if !isInitializing && !isApplyingDeviceStateToUI {
-                radio.setFilters(emphasis: filterPreemphasis, highpass: filterHighPass, lowpass: filterLowPass)
-            }
-        }
-    }
     var filterHighPass: Bool = true {
         didSet {
             if !isInitializing && !isApplyingDeviceStateToUI {
-                radio.setFilters(emphasis: filterPreemphasis, highpass: filterHighPass, lowpass: filterLowPass)
+                radio.setFilters(highpass: filterHighPass, lowpass: filterLowPass)
             }
         }
     }
     var filterLowPass: Bool = false {
         didSet {
             if !isInitializing && !isApplyingDeviceStateToUI {
-                radio.setFilters(emphasis: filterPreemphasis, highpass: filterHighPass, lowpass: filterLowPass)
+                radio.setFilters(highpass: filterHighPass, lowpass: filterLowPass)
             }
         }
     }
@@ -381,14 +374,11 @@ class RadioStore {
         squelch = ds.squelch
         bandwidth = ds.bw == DRA818_25K ? 0 : 1
         txPower = (!radio.hasHighLowPowerSwitch || (ds.flags & HOST_STATE_HIGH_POWER) != 0) ? "High" : "Low"
-        filterPreemphasis = (ds.flags & HOST_STATE_FILTER_PRE) != 0
-        filterHighPass = (ds.flags & HOST_STATE_FILTER_HIGH) != 0
-        // NB: do NOT force the DRA818 low-pass filter on here. It sits on the
-        // analog audio output that feeds both the phone audio stream and the
-        // ESP32's AFSK demodulator, and enabling it distorts the 2200 Hz space
-        // tone enough to break AX.25/APRS decode. It cleans up listening audio
-        // but kills packet RX; leave it user-controlled (default off).
-        filterLowPass = (ds.flags & HOST_STATE_FILTER_LOW) != 0
+        // Firmware DSP stop filters (see RadioModuleController.setFilters):
+        // FILTER_LOW is the high-pass, FILTER_HIGH the low-pass. Both sit after
+        // the AFSK/squelch taps, so they only shape voice audio.
+        filterHighPass = (ds.flags & HOST_STATE_FILTER_LOW) != 0
+        filterLowPass = (ds.flags & HOST_STATE_FILTER_HIGH) != 0
         vfoOffset = ds.freqTx - ds.freqRx
         vfoToneIndex = ds.ctcssTx
     }
@@ -618,7 +608,7 @@ class RadioStore {
         radio.setSquelch(squelch)
         radio.setBandwidth(bandwidth == 0 ? DRA818_25K : DRA818_12K5)
         radio.setTxTone(simplexOverride ? 0 : vfoToneIndex)
-        radio.setFilters(emphasis: filterPreemphasis, highpass: filterHighPass, lowpass: filterLowPass)
+        radio.setFilters(highpass: filterHighPass, lowpass: filterLowPass)
         radio.setHighPower(isHighPower)
         if ptt { radio.pttDown() } else { radio.pttUp() }
         radio.endUpdate()
