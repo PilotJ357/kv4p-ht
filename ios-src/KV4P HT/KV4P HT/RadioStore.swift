@@ -262,14 +262,22 @@ class RadioStore {
         notifications.onReply = { [weak self] to, text in
             DispatchQueue.main.async { _ = self?.aprs.sendMessage(to: to, text: text) }
         }
-        notifications.onMute = { [weak self] base in
-            DispatchQueue.main.async { self?.aprsNotify.mutedCallsigns.insert(base) }
+        notifications.onMute = { [weak self] base, fromDemo in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.aprsNotify.mutedCallsigns.insert(base).inserted, fromDemo {
+                    self.demoMutedCallsigns.insert(base)
+                }
+            }
         }
         notifications.onOpen = { [weak self] entryID, _, _ in
             DispatchQueue.main.async { self?.pendingMapFocusID = entryID }
         }
         ble.demoLocationProvider = { [weak self] in
             self?.locationManager.location?.coordinate
+        }
+        ble.onDemoSessionChanged = { [weak self] active in
+            if active { self?.beginDemoSession() } else { self?.endDemoSession() }
         }
         ble.onAx25Frame = { [weak self] data in
             DispatchQueue.main.async { self?.aprs.handleAx25Frame(data) }
@@ -292,6 +300,34 @@ class RadioStore {
             self.ble.setRxAudioMuted(self.effectiveRxMuted)
         }
         aprs.updateBeaconTimer()
+    }
+
+    // MARK: - Demo session
+
+    // Stations muted from demo notifications; unmuted when the demo ends.
+    // Persisted so a launch after being killed mid-demo can undo them too.
+    private static let demoMutesKey = "aprsDemoMutedCallsigns"
+    @ObservationIgnored private var demoMutedCallsigns: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(demoMutedCallsigns), forKey: Self.demoMutesKey) }
+    }
+
+    // Demo traffic must leave nothing behind in real use (#62): history and
+    // the message counter (APRSController), notification cooldowns and
+    // banners (NotificationManager), mutes, and the Live Activity count.
+    private func beginDemoSession() {
+        demoMutedCallsigns = []
+        aprs.beginDemoSession()
+        notifications.beginDemoSession()
+    }
+
+    private func endDemoSession() {
+        aprs.endDemoSession()
+        notifications.endDemoSession()
+        if !demoMutedCallsigns.isEmpty {
+            aprsNotify.mutedCallsigns.subtract(demoMutedCallsigns)
+            demoMutedCallsigns = []
+        }
+        liveActivity.end()
     }
 
     private static let themeModeKey = "themeMode"
@@ -338,7 +374,13 @@ class RadioStore {
 
     private func loadNotifySettings() {
         guard let data = UserDefaults.standard.data(forKey: Self.notifySettingsKey),
-              let s = try? JSONDecoder().decode(APRSNotifySettings.self, from: data) else { return }
+              var s = try? JSONDecoder().decode(APRSNotifySettings.self, from: data) else { return }
+        // Undo mutes from a demo session that never ended (app killed), and
+        // from builds before demo isolation.
+        s.mutedCallsigns.subtract(DemoRadio.stationCallsigns)
+        let demoMutes = UserDefaults.standard.stringArray(forKey: Self.demoMutesKey) ?? []
+        s.mutedCallsigns.subtract(demoMutes)
+        UserDefaults.standard.removeObject(forKey: Self.demoMutesKey)
         aprsNotify = s
     }
 
