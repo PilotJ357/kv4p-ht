@@ -872,7 +872,10 @@ private struct ScanBody: View {
 struct CaptionsSheet: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
+    @Environment(\.openURL) private var openURL
     @Bindable var store: RadioStore
+
+    private var isListening: Bool { store.captionsStatus == .listening }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -889,17 +892,17 @@ struct CaptionsSheet: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(t.red)
+                        .fill(isListening ? t.red : t.label3)
                         .frame(width: 7, height: 7)
-                        .shadow(color: t.red, radius: 4)
-                    Text("LIVE")
+                        .shadow(color: isListening ? t.red : .clear, radius: 4)
+                    Text(isListening ? "LIVE" : "OFF")
                         .font(.system(size: 12, weight: .heavy))
                         .tracking(0.6)
-                        .foregroundStyle(t.red)
+                        .foregroundStyle(isListening ? t.red : t.label2)
                 }
                 .padding(.horizontal, 11)
                 .padding(.vertical, 6)
-                .background(t.redSoft)
+                .background(isListening ? t.redSoft : t.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 9))
             }
             .padding(.horizontal, 20)
@@ -954,7 +957,9 @@ struct CaptionsSheet: View {
                 .padding(.bottom, 16)
             }
 
-            if store.captionLines.isEmpty {
+            if let message = store.captionsStatus.message(language: store.captionLanguage) {
+                statusPanel(message)
+            } else if store.captionLines.isEmpty {
                 Text("Waiting for audio…")
                     .font(.system(size: 14))
                     .foregroundStyle(t.label3)
@@ -967,5 +972,45 @@ struct CaptionsSheet: View {
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.theme, store.theme)
+        // Opening captions is the point of intent for the speech prompt.
+        .onAppear { store.requestCaptionsPermissionIfNeeded() }
+    }
+
+    // Why captions aren't running, plus the one action that fixes it.
+    private func statusPanel(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            Text(message)
+                .font(.system(size: 14))
+                .foregroundStyle(t.label2)
+                .multilineTextAlignment(.center)
+            switch store.captionsStatus {
+            case .off:
+                statusButton("Turn On Live Captions") { store.liveCaptions = true }
+            case .needsPermission:
+                statusButton("Allow Speech Recognition") {
+                    store.requestCaptionsPermissionIfNeeded()
+                }
+            case .denied:
+                statusButton("Open Settings") { openURL(CaptionsStatus.appSettingsURL) }
+            case .restricted, .unavailable, .listening:
+                EmptyView()
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 12)
+    }
+
+    private func statusButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(t.accent)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(t.accentSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 }
