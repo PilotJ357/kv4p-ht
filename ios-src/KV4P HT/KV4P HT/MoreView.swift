@@ -58,7 +58,7 @@ struct MoreView: View {
                         .buttonStyle(.plain)
                         Button { showAbout = true } label: {
                             ListRow(
-                                title: "About KV4P HT",
+                                title: "About",
                                 leading: IconTile(color: t.accent, systemImage: "info.circle.fill") as (any View),
                                 isLast: true
                             )
