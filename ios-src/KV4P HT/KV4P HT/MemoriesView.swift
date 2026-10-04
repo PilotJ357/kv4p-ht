@@ -188,7 +188,6 @@ struct AddMemoryView: View {
     @State private var offsetText = "0"
     @State private var toneValue: Float = 0
     @State private var scanEnabled = true
-    @State private var bwWide = true
 
     init(store: RadioStore, editing: Memory? = nil) {
         self.store = store
@@ -248,14 +247,6 @@ struct AddMemoryView: View {
                             onIncrement: {
                                 if let idx = tones.firstIndex(of: toneValue), idx < tones.count - 1 { toneValue = tones[idx + 1] }
                             },
-                            isLast: true
-                        )
-                    }
-
-                    ListGroupView(header: "Transmit") {
-                        FieldRow(
-                            label: "Bandwidth",
-                            value: .constant(bwWide ? "Wide · 25 kHz" : "Narrow · 12.5 kHz"),
                             isLast: true
                         )
                     }

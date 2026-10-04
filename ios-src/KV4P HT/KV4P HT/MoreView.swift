@@ -6,44 +6,14 @@ struct MoreView: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
     @State private var showSettings = false
-    @State private var showRecordings = false
     @State private var showDeviceInfo = false
     @State private var showPosition = false
-    @State private var showBandPlan = false
     @State private var showPrivacy = false
 
-    private struct Tile { var icon: String; var label: String; var color: String }
-    private let tiles: [Tile] = [
-        Tile(icon: "record.circle",      label: "Recordings",      color: "red"),
-        Tile(icon: "captions.bubble",    label: "Transcript log", color: "accent"),
-        Tile(icon: "cpu",                label: "Auto-config",     color: "green"),
-        Tile(icon: "barcode.viewfinder", label: "Scan lists",      color: "amber"),
-    ]
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 4) {
-                    // 2×2 tile grid
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        ForEach(tiles.indices, id: \.self) { i in
-                            let tile = tiles[i]
-                            Button {
-                                if tile.label == "Recordings" { showRecordings = true }
-                            } label: {
-                                MoreTile(
-                                icon: tile.icon,
-                                label: tile.label,
-                                color: tileColor(tile.color),
-                                badge: "Soon"
-                            )
-                            }
-                            .disabled(true)
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 6)
-
                     // Radio rows
                     ListGroupView {
                         Button { showDeviceInfo = true } label: {
@@ -60,21 +30,13 @@ struct MoreView: View {
                                 title: "My position & beacon",
                                 value: store.aprsBeaconEnabled ? "On" : "Off",
                                 leading: IconTile(color: t.green, systemImage: "location.fill") as (any View),
-                                isLast: false
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        Button { showBandPlan = true } label: {
-                            ListRow(
-                                title: "Band plan & limits",
-                                leading: IconTile(color: Color(hex: "8E8E93"), systemImage: "info.circle") as (any View),
                                 isLast: true
                             )
                         }
                         .buttonStyle(.plain)
                     }
 
-                    // Settings / About rows
+                    // Settings / Privacy rows
                     ListGroupView {
                         Button { showSettings = true } label: {
                             ListRow(
@@ -88,15 +50,10 @@ struct MoreView: View {
                             ListRow(
                                 title: "Privacy",
                                 leading: IconTile(color: t.green, systemImage: "hand.raised.fill") as (any View),
-                                isLast: false
+                                isLast: true
                             )
                         }
                         .buttonStyle(.plain)
-                        ListRow(
-                            title: "About kv4p HT",
-                            leading: IconTile(color: t.accent, systemImage: "info.circle") as (any View),
-                            isLast: true
-                        )
                     }
 
                     Text("kv4p HT · Open-source ham radio · GPLv3")
@@ -114,15 +71,6 @@ struct MoreView: View {
         .sheet(isPresented: $showSettings) {
             NavigationStack {
                 SettingsView(store: store)
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showRecordings) {
-            NavigationStack {
-                RecordingsView(store: store)
             }
             .environment(\.theme, store.theme)
             .preferredColorScheme(store.theme.isDark ? .dark : .light)
@@ -155,70 +103,6 @@ struct MoreView: View {
             .preferredColorScheme(store.theme.isDark ? .dark : .light)
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showBandPlan) {
-            NavigationStack {
-                PlaceholderView(title: "Band Plan & Limits",
-                                subtitle: "Band plan configuration and frequency limits coming in a future update.")
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-    }
-
-    private func tileColor(_ name: String) -> Color {
-        switch name {
-        case "red":    return t.red
-        case "green":  return t.green
-        case "amber":  return t.amber
-        default:       return t.accent
-        }
-    }
-}
-
-// MARK: - More tile
-
-struct MoreTile: View {
-    @Environment(\.theme) var t
-    var icon: String
-    var label: String
-    var color: Color
-    var badge: String?
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 10) {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(color)
-                    .frame(width: 38, height: 38)
-                    .overlay(
-                        Image(systemName: icon)
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.white)
-                    )
-                Text(label)
-                    .font(.system(size: 15.5, weight: .semibold))
-                    .foregroundStyle(t.label)
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(t.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-
-            if let b = badge {
-                Text(b)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 20, minHeight: 20)
-                    .padding(.horizontal, 6)
-                    .background(t.red)
-                    .clipShape(Capsule())
-                    .padding(.top, 14)
-                    .padding(.trailing, 14)
-            }
         }
     }
 }
@@ -295,7 +179,9 @@ struct SettingsView: View {
                         Divider().padding(.leading, 16).background(t.sep)
                         TXPowerRow(store: store)
                         Divider().padding(.leading, 16).background(t.sep)
-                        ListRow(title: "Band",     value: "2 m · VHF",   isLast: true)
+                        ListRow(title: "Band",
+                                value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–",
+                                showChevron: false, isLast: true)
                     }
 
                     // Audio filters
@@ -315,12 +201,8 @@ struct SettingsView: View {
                         header: "Transcription",
                         footer: "On-device speech recognition. No data sent to the cloud."
                     ) {
-                        ListRow(title: "Live captions",     isLast: false, dense: true,
+                        ListRow(title: "Live captions",     isLast: true, dense: true,
                                 accessory: KVToggle(isOn: $store.liveCaptions) as (any View))
-                        ListRow(title: "Save transcripts",  isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.saveTranscripts) as (any View))
-                            .disabled(true)
-                        ListRow(title: "Language", value: store.captionLanguage, isLast: true)
                     }
                     .onChange(of: store.liveCaptions) { _, enabled in
                         guard enabled else { return }
@@ -356,10 +238,8 @@ struct SettingsView: View {
                             .padding(.vertical, 12)
                             Divider().padding(.leading, 16).background(t.sep)
                         }
-                        ListRow(title: "Sticky PTT",     isLast: false, dense: true,
+                        ListRow(title: "Sticky PTT",     isLast: true, dense: true,
                                 accessory: KVToggle(isOn: $store.stickyPTT) as (any View))
-                        ListRow(title: "Reduce motion",  isLast: true, dense: true,
-                                accessory: KVToggle(isOn: $store.reduceMotion) as (any View))
                     }
                 }
                 .padding(.bottom, 32)
@@ -487,116 +367,6 @@ private struct SquelchSliderRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-    }
-}
-
-// MARK: - Recordings view
-
-struct RecordingsView: View {
-    @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
-    @Bindable var store: RadioStore
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(store.recordings.enumerated()), id: \.element.id) { idx, rec in
-                        RecordingRow(recording: rec, isLast: idx == store.recordings.count - 1)
-                    }
-                }
-                .background(t.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
-            }
-
-            HStack(spacing: 4) {
-                Text("Recording is a preview — coming in a future update.")
-            }
-            .font(.system(size: 12.5))
-            .foregroundStyle(t.label3)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 20)
-        }
-                .background(t.bg.ignoresSafeArea())
-        .navigationTitle("Recordings")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HeaderIconBtn(systemImage: "record.circle", tint: t.red)
-            }
-        }
-        .environment(\.theme, store.theme)
-    }
-}
-
-private struct RecordingRow: View {
-    @Environment(\.theme) var t
-    var recording: Recording
-    var isLast: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(recording.isPlaying ? t.accent : t.fill)
-                        .frame(width: 40, height: 40)
-                        .overlay(
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundStyle(recording.isPlaying ? .white : t.label)
-                        )
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 7) {
-                            Text(recording.label)
-                                .font(.system(size: 15.5, weight: .semibold))
-                                .foregroundStyle(t.label)
-                            if recording.hasTranscript {
-                                Image(systemName: "captions.bubble")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(t.label2)
-                            }
-                        }
-                        HStack(spacing: 0) {
-                            Text(recording.callsign)
-                                .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(t.label2)
-                            Text(" · \(recording.freqString) · \(recording.date)")
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(t.label2)
-                        }
-                    }
-                    Spacer()
-                    Text(recording.duration)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(t.label2)
-                }
-
-                // Playback waveform (playing only)
-                if recording.isPlaying {
-                    ZStack(alignment: .leading) {
-                        WaveformView(color: t.label2.opacity(0.35), seed: 1)
-                        WaveformView(color: t.accent, seed: 1)
-                            .mask(
-                                GeometryReader { geo in
-                                    Rectangle()
-                                        .frame(width: geo.size.width * CGFloat(recording.progress))
-                                }
-                            )
-                    }
-                    .padding(.leading, 52)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .background(recording.isPlaying ? t.accentSoft : Color.clear)
-
-            if !isLast {
-                Divider().padding(.leading, 66).background(t.sep)
-            }
-        }
     }
 }
 
@@ -839,47 +609,6 @@ private struct PickerRow: View {
             .frame(minHeight: 46)
             if !isLast {
                 Divider().padding(.leading, 16).background(t.sep)
-            }
-        }
-    }
-}
-
-// MARK: - Placeholder stub
-
-struct PlaceholderView: View {
-    @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
-    var title: String
-    var subtitle: String
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            VStack(spacing: 12) {
-                Image(systemName: "clock")
-                    .font(.system(size: 36))
-                    .foregroundStyle(t.label3)
-                Text(subtitle)
-                    .font(.system(size: 15))
-                    .foregroundStyle(t.label2)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
-            Spacer()
-        }
-                .background(t.bg.ignoresSafeArea())
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("More")
-                            .font(.system(size: 17))
-                    }
-                }
             }
         }
     }

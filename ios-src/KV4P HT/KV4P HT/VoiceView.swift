@@ -257,19 +257,11 @@ private struct RadioStage: View {
                             store.radio.setSquelch(store.squelch)
                         }
                     )
-                    HStack(spacing: 8) {
-                        SmallAction(
-                            systemImage: "captions.bubble",
-                            label:       "Captions",
-                            on:          showCaptions
-                        ) { showCaptions = true }
-                        SmallAction(
-                            systemImage: "record.circle",
-                            label:       "Record",
-                            on:          false
-                        ) { }
-                        .disabled(true)
-                    }
+                    SmallAction(
+                        systemImage: "captions.bubble",
+                        label:       "Captions",
+                        on:          showCaptions
+                    ) { showCaptions = true }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -933,21 +925,6 @@ struct CaptionsSheet: View {
                 .padding(.bottom, 16)
             }
 
-            // Bottom actions (coming soon)
-            HStack(spacing: 8) {
-                SmallAction(systemImage: "captions.bubble", label: "Captions", on: true) { }
-                    .disabled(true)
-                SmallAction(systemImage: "record.circle",   label: "Record") { }
-                    .disabled(true)
-                SmallAction(systemImage: "magnifyingglass", label: "Search log") { }
-                    .disabled(true)
-                SmallAction(systemImage: "arrow.down.to.line", label: "Save") { }
-                    .disabled(true)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 14)
-            .padding(.top, 8)
-
             if store.captionLines.isEmpty {
                 Text("Waiting for audio…")
                     .font(.system(size: 14))
@@ -960,11 +937,6 @@ struct CaptionsSheet: View {
                 .background(t.bg.ignoresSafeArea())
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HeaderIconBtn(systemImage: "gearshape.fill") { }
-            }
-        }
         .environment(\.theme, store.theme)
     }
 }

@@ -64,21 +64,6 @@ struct CaptionLine: Identifiable {
     var active: Bool = false
 }
 
-struct Recording: Identifiable {
-    let id = UUID()
-    var label: String
-    var callsign: String
-    var freq: Float
-    var duration: String
-    var date: String
-    var hasTranscript: Bool
-    var isPlaying: Bool = false
-    var progress: Float = 0
-
-    var freqString: String { String(format: "%.3f", freq) }
-
-}
-
 // MARK: - Radio Store
 
 @Observable
@@ -118,7 +103,6 @@ class RadioStore {
     var vfoOffset: Float = 0       // MHz, 0 = simplex
     var vfoToneIndex: UInt8 = 0    // CTCSS index, 0 = off
     var captionsEnabled: Bool = false
-    var isRecording: Bool = false
     var isScanning: Bool = false
     var scanIndex: Int = 0
     var scanPaused: Bool = false
@@ -197,9 +181,6 @@ class RadioStore {
     // the Map tab and MapView centers on this entry, then clears it.
     var pendingMapFocusID: UUID? = nil
 
-    // ── Recordings
-    var recordings: [Recording] = []
-
     // ── Captions
     var captionLines: [CaptionLine] = []
     let speechManager = SpeechManager()
@@ -234,7 +215,6 @@ class RadioStore {
         }
     }
     var liveCaptions: Bool = true
-    var saveTranscripts: Bool = true
     var stickyPTT: Bool = false
     var bandwidth: UInt8 = 0 {  // 0=wide 25kHz, 1=narrow 12.5kHz
         didSet {
@@ -243,7 +223,6 @@ class RadioStore {
             }
         }
     }
-    var reduceMotion: Bool = false
     var captionLanguage: String = "English (US)"
 
     // ── Init

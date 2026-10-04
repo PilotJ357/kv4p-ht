@@ -85,8 +85,6 @@ struct APRSMapView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 13))
 
                     Spacer()
-
-                    HeaderIconBtn(systemImage: "location.fill")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
