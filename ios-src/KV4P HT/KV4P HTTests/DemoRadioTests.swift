@@ -46,10 +46,10 @@ struct DemoRadioTests {
             radio.seedFromDeviceState(hello.deviceState)
             radio.beginUpdate()
             radio.markTransportReady()
-            radio.setTxAllowed(true)
             radio.openAudio()
             radio.endUpdate()
             #expect(radio.isAppliedStateInSync)
+            #expect(radio.isTxAllowed)  // demo boots on 146.520
 
             // Tune + key up: applied state follows and reports TX.
             radio.beginUpdate()
@@ -64,6 +64,32 @@ struct DemoRadioTests {
             #expect(radio.deviceState.map { $0.flags & DEVICE_STATE_TX_ACTIVE != 0 } == true)
 
             radio.pttUp()
+            #expect(radio.deviceState?.mode == 1)
+            demo.stop()
+        }
+    }
+
+    @Test func outOfBandTuneNeverKeysDemo() {
+        let (demo, queue, _) = makeDemo()
+        let radio = RadioModuleController()
+        demo.onDeviceState = { radio.updateDeviceState($0) }
+        queue.sync {
+            demo.start()
+            let hello = demo.hello
+            radio.attachTransport { state in demo.apply(state) }
+            radio.seedFirmwareInfo(hello)
+            radio.seedFromDeviceState(hello.deviceState)
+            radio.markTransportReady()
+
+            // Inside the module's 134–174 MHz range, outside 2 m.
+            radio.beginUpdate()
+            radio.setRxFrequency(156.8)
+            radio.setTxFrequency(156.8)
+            radio.pttDown()
+            radio.endUpdate()
+            #expect(radio.isAppliedStateInSync)
+            #expect(radio.deviceState?.freqRx == 156.8)
+            #expect(radio.deviceState.map { $0.flags & HOST_STATE_TX_ALLOWED == 0 } == true)
             #expect(radio.deviceState?.mode == 1)
             demo.stop()
         }
