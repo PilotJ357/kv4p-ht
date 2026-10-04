@@ -492,6 +492,12 @@ struct BeaconSettingsView: View {
                                 accessory: KVToggle(isOn: $store.aprsPositionApprox) as (any View))
                     }
 
+                    if store.locationManager.access.isUnavailable {
+                        LocationUnavailableNotice(
+                            access: store.locationManager.access,
+                            consequence: "Position beacons can't be sent until it's available.")
+                    }
+
                     ListGroupView(header: "Map symbol") {
                         PickerRow(title: "Symbol",
                                   selection: Binding(
@@ -550,6 +556,8 @@ struct BeaconSettingsView: View {
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Position & Beacon")
         .navigationBarTitleDisplayMode(.large)
+        // A "Not sent" reason is stale once location access changes.
+        .onChange(of: store.locationManager.access) { beaconStatus = nil }
         .alert("Share your position publicly?",
                isPresented: Binding(get: { consentAction != nil },
                                     set: { if !$0 { consentAction = nil } }),
@@ -603,11 +611,44 @@ struct BeaconSettingsView: View {
             let result = await store.aprs.sendPositionBeacon()
             switch result {
             case .sent:       beaconStatus = "Beacon sent"
-            case .noLocation: beaconStatus = "Waiting for GPS fix — try again"
+            case .noLocation(let access): beaconStatus = access.beaconStatus
             case .notReady:   beaconStatus = "Not connected or no callsign set"
             case .outOfBand:  beaconStatus = "Not sent — beacon frequency is outside the amateur band"
             case .noConsent:  beaconStatus = nil
             }
+        }
+    }
+}
+
+// Explains why location-dependent features can't work and links to the
+// app's page in Settings (iOS has no public link to Location Services).
+private struct LocationUnavailableNotice: View {
+    @Environment(\.theme) var t
+    @Environment(\.openURL) private var openURL
+    var access: LocationAccess
+    var consequence: String
+
+    var body: some View {
+        ListGroupView(header: "Location") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "location.slash")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(t.amber)
+                    Text("\(access.explanation ?? "") \(consequence)")
+                        .font(.system(size: 15))
+                        .foregroundStyle(t.label)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(t.accent)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
     }
 }
@@ -730,6 +771,12 @@ struct APRSNotificationsView: View {
                     }
                     .disabled(!store.aprsNotify.enabled)
                     .opacity(store.aprsNotify.enabled ? 1 : 0.4)
+
+                    if store.aprsNotify.distanceFilterMi != nil && store.locationManager.access.isUnavailable {
+                        LocationUnavailableNotice(
+                            access: store.locationManager.access,
+                            consequence: "Without your location the distance filter can't apply, so stations at any distance notify.")
+                    }
 
                     ListGroupView(
                         header: "Live activity",

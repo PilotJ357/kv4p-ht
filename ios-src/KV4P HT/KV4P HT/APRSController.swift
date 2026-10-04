@@ -557,7 +557,8 @@ class APRSController {
     // MARK: - Position beacon
 
     enum BeaconResult {
-        case sent, noLocation, notReady, noConsent, outOfBand
+        case sent, notReady, noConsent, outOfBand
+        case noLocation(LocationAccess)
     }
 
     func sendPositionBeacon() async -> BeaconResult {
@@ -571,7 +572,7 @@ class APRSController {
         else { return .outOfBand }
         guard let location = store.locationManager.location else {
             store.locationManager.requestLocation()
-            return .noLocation
+            return .noLocation(store.locationManager.access)
         }
         var lat = location.coordinate.latitude
         var lon = location.coordinate.longitude

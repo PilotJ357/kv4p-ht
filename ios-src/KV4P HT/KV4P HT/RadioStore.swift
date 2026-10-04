@@ -651,6 +651,8 @@ class RadioStore {
         setupAudioSampleHook()
         ble.recoverAudioIfNeeded()
         captionsSuspended = false
+        // Settings may have changed location access while we were away.
+        locationManager.refresh()
         // Speech permission may have changed in Settings while away; also
         // resumes captions if a signal is still being received.
         refreshCaptionsStatus()
