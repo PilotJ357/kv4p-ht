@@ -378,35 +378,6 @@ struct InfoPill: View {
     }
 }
 
-// MARK: - Waveform (recordings)
-
-struct WaveformView: View {
-    @Environment(\.theme) var t
-    var color: Color
-    var seed: Int = 1
-    var barCount: Int = 40
-
-    private func barHeight(_ i: Int) -> Double {
-        let v = (sin(Double(i) * 0.7 + Double(seed)) * 0.5 + 0.5)
-              * (sin(Double(i) * 0.27 + Double(seed) * 2) * 0.4 + 0.6)
-        return 0.18 + v * 0.82
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            HStack(alignment: .center, spacing: 2) {
-                ForEach(0..<barCount, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(color)
-                        .frame(width: 2.5, height: geo.size.height * barHeight(i))
-                }
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .frame(height: 30)
-    }
-}
-
 // MARK: - Environment key: persistent MPVolumeView
 
 private struct MPVolumeViewKey: EnvironmentKey {
