@@ -3,7 +3,8 @@
     {
       "idiom" : "universal",
       "platform" : "ios",
-      "size" : "1024x1024"
+      "size" : "1024x1024",
+      "filename" : "icon-light.png"
     },
     {
       "appearances" : [
@@ -14,7 +15,8 @@
       ],
       "idiom" : "universal",
       "platform" : "ios",
-      "size" : "1024x1024"
+      "size" : "1024x1024",
+      "filename" : "icon-dark.png"
     },
     {
       "appearances" : [
@@ -25,7 +27,8 @@
       ],
       "idiom" : "universal",
       "platform" : "ios",
-      "size" : "1024x1024"
+      "size" : "1024x1024",
+      "filename" : "icon-tinted.png"
     }
   ],
   "info" : {
