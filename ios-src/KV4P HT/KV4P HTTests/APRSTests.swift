@@ -198,6 +198,74 @@ struct APRSParseTests {
         #expect(text.hasPrefix(">"))
     }
 
+    @Test func micEPosition() throws {
+        // Real-world capture: KD9PKQ-1>T0SQ0W:`tU0mJI>/]"6U}=
+        let info = parseMicEPayload(Data("`tU0mJI>/]\"6U}=".utf8), destCall: "T0SQ0W")
+        guard case let .position(lat, lon, table, code, comment, _) = info else {
+            Issue.record("expected position, got \(String(describing: info))")
+            return
+        }
+        #expect(abs(lat - 40.51783) < 0.001)
+        #expect(abs(lon - (-88.95333)) < 0.001)
+        #expect(table == "/")
+        #expect(code == ">")
+        #expect(comment.contains("crs=245"))
+        #expect(comment.contains("spd=14kt"))
+    }
+
+    @Test func micEAmbiguity() throws {
+        // 'K' in destcall[2] marks position ambiguity (tens-of-minutes
+        // unknown -> ambiguity level 1, minutes rounded to 30.00).
+        let info = parseMicEPayload(Data("`tU0mJI>/test".utf8), destCall: "T0KQ0W")
+        guard case let .position(lat, lon, _, _, _, _) = info else {
+            Issue.record("expected position, got \(String(describing: info))")
+            return
+        }
+        #expect(abs(lat - 40.5) < 0.001)
+        #expect(abs(lon - (-88.95417)) < 0.001)
+    }
+
+    @Test func micEStripsTypeAndAltitude() throws {
+        // Real-world: AC7SG-9>TW3VYS — type byte '`', altitude '"5i', terminator '}'
+        let raw: [UInt8] = Array("`2/ul!&>/".utf8) + [0x60] + Array("\"5i}146.520MHz in my car".utf8)
+        let info = parseMicEPayload(Data(raw), destCall: "TW3VYS")
+        guard case let .position(_, _, _, _, comment, _) = info else {
+            Issue.record("expected position, got \(String(describing: info))")
+            return
+        }
+        #expect(!comment.contains("`"))
+        #expect(!comment.contains("}"))
+        #expect(comment.contains("146.520MHz in my car"))
+    }
+
+    @Test func micEExistingStripsExtension() throws {
+        // Existing test data: ] type indicator, "6U altitude, } terminator, = comment
+        let info = parseMicEPayload(Data("`tU0mJI>/]\"6U}=".utf8), destCall: "T0SQ0W")
+        guard case let .position(_, _, _, _, comment, _) = info else {
+            Issue.record("expected position, got \(String(describing: info))")
+            return
+        }
+        #expect(!comment.contains("]"))
+        #expect(!comment.contains("}"))
+        #expect(comment.contains("=") || comment.contains("crs="))
+    }
+
+    @Test func micELonOffset100() throws {
+        // dest[4]='S' (P-Y → bit=1 → +100° lon offset), dest[5]='W' → West
+        // Same info bytes as the main Mic-E test; lon should be 108° not 88°.
+        let info = parseMicEPayload(Data("`tU0mJI>/]\"6U}=".utf8), destCall: "T0SQSW")
+        guard case let .position(_, lon, _, _, _, _) = info else {
+            Issue.record("expected position, got \(String(describing: info))")
+            return
+        }
+        #expect(abs(lon - (-108.95333)) < 0.001)
+    }
+
+    @Test func micENotMicE() throws {
+        let info = parseMicEPayload(Data("!3449.94N/08448.56W-test".utf8), destCall: "APRS")
+        #expect(info == nil)
+    }
+
     @Test func messagePayloadBuilder() {
         #expect(messagePayload(to: "N1AA", text: "hi", msgNum: "7")
                 == ":N1AA     :hi{7")
