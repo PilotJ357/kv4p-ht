@@ -129,6 +129,10 @@ struct ContentView: View {
 // MARK: - Custom Tab Bar
 
 struct KVTabBar: View {
+    // Hairline + button row. The bar's safeAreaInset doesn't reach content
+    // inside the TabView pages, so bottom-pinned overlays pad by this.
+    static let height: CGFloat = 49.5
+
     @Environment(\.theme) var t
     var tabs: [ContentView.Tab]
     @Binding var selected: ContentView.Tab

@@ -109,7 +109,11 @@ struct APRSMapView: View {
                             .font(.system(size: 15))
                             .foregroundStyle(t.label2)
                     }
-                    .padding(.bottom, 40)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                    .padding(.bottom, KVTabBar.height + 24)
                 }
             }
         }
