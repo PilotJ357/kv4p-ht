@@ -13,6 +13,9 @@ class SpeechManager {
     // Segments whose audio has ended but whose final result hasn't arrived;
     // the timeout cancels a task that never reports back.
     private var drainingSegments: [Int: (task: SFSpeechRecognitionTask, timeout: Task<Void, Never>)] = [:]
+    // Per-segment caption text, kept across the recognizer's restarts
+    // after pauses (see TranscriptAccumulator).
+    private var transcripts: [Int: TranscriptAccumulator] = [:]
     // Thread-safe reference for feeding samples from BLE queue
     nonisolated(unsafe) private var activeRequest: SFSpeechAudioBufferRecognitionRequest?
 
@@ -95,11 +98,19 @@ class SpeechManager {
         let segmentID = segmentGeneration
         currentTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             let text = result?.bestTranscription.formattedString
+            let firstWordStart = result?.bestTranscription.segments.first?.timestamp
             let isFinal = result?.isFinal ?? false
             let failed = result == nil && error != nil
             Task { @MainActor in
                 guard let self, self.isTracked(segmentID) else { return }
-                if let text { self.onPartialResult?(segmentID, text) }
+                if let text {
+                    var transcript = self.transcripts[segmentID] ?? TranscriptAccumulator()
+                    let display = isFinal
+                        ? transcript.final(text)
+                        : transcript.partial(text, firstWordStart: firstWordStart)
+                    self.transcripts[segmentID] = transcript
+                    self.onPartialResult?(segmentID, display)
+                }
                 if isFinal {
                     self.segmentDidEnd(segmentID, .finished)
                 } else if failed {
@@ -156,6 +167,7 @@ class SpeechManager {
             guard !Task.isCancelled, let self,
                   let draining = self.drainingSegments.removeValue(forKey: segmentID) else { return }
             draining.task.cancel()
+            self.transcripts[segmentID] = nil
             self.onSegmentFinalized?(segmentID)
         }
         drainingSegments[segmentID] = (task, timeout)
@@ -181,6 +193,7 @@ class SpeechManager {
     }
 
     private func segmentDidEnd(_ segmentID: Int, _ ending: CaptionRestartPolicy.Ending) {
+        transcripts[segmentID] = nil
         if segmentID == liveSegmentID {
             segmentTimer?.invalidate()
             segmentTimer = nil
