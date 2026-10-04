@@ -203,8 +203,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     // Sends raw AX.25 bytes (no FCS) for the firmware's AFSK modem to
-    // transmit. Firmware keys/unkeys PTT itself; TX_ALLOWED is kept set in
-    // desired state after HELLO.
+    // transmit. Firmware keys/unkeys PTT itself, and drops the frame unless
+    // TX_ALLOWED (band-plan derived, see RadioModuleController) is set.
     func sendAx25Frame(_ ax25: Data) {
         let frame = buildKissDataFrame(ax25)
         bleQueue.async { [weak self] in
@@ -542,10 +542,10 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
         // App-required desired-state changes only; the controller diffs
         // against the seeded baseline and emits a single update without
-        // overwriting unrelated firmware config.
+        // overwriting unrelated firmware config. TX_ALLOWED was re-derived
+        // from the band plan when seeded above and rides in the same frame.
         radio.beginUpdate()
         radio.markTransportReady()
-        radio.setTxAllowed(true)
         radio.disableHardwareDeemphasis()
         radio.openAudio()  // ESP32 won't stream audio until RX_AUDIO_OPEN is set
         radio.endUpdate()
