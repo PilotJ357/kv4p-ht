@@ -10,6 +10,7 @@ struct MoreView: View {
     @State private var showDeviceInfo = false
     @State private var showPosition = false
     @State private var showPrivacy = false
+    @State private var showAbout = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,6 +52,14 @@ struct MoreView: View {
                             ListRow(
                                 title: "Privacy",
                                 leading: IconTile(color: t.green, systemImage: "hand.raised.fill") as (any View),
+                                isLast: false
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        Button { showAbout = true } label: {
+                            ListRow(
+                                title: "About KV4P HT",
+                                leading: IconTile(color: t.accent, systemImage: "info.circle.fill") as (any View),
                                 isLast: true
                             )
                         }
@@ -90,6 +99,15 @@ struct MoreView: View {
         .sheet(isPresented: $showPosition) {
             NavigationStack {
                 BeaconSettingsView(store: store)
+            }
+            .environment(\.theme, store.theme)
+            .preferredColorScheme(store.theme.isDark ? .dark : .light)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showAbout) {
+            NavigationStack {
+                AboutView(store: store)
             }
             .environment(\.theme, store.theme)
             .preferredColorScheme(store.theme.isDark ? .dark : .light)

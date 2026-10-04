@@ -135,6 +135,7 @@ private struct RadioStage: View {
     @State private var holdKeyed = false
     @State private var showNumpad = false
     @State private var showOffsetTone = false
+    @State private var showLicenseAck = false
 
     // Applied state (firmware DeviceState) drives the badge and frequency
     // color; local request state drives the PTT button visual. The S-meter
@@ -166,10 +167,11 @@ private struct RadioStage: View {
     // Runs the gate for a press that would key. Returns true if PTT went out.
     private func keyIfAllowed() -> Bool {
         switch store.voicePTTGate {
-        case .key:        sendPTT(true); return true
-        case .requestMic: store.requestMicPermission()
-        case .micDenied:  openAppSettings()
-        case .outOfBand:  break
+        case .key:             sendPTT(true); return true
+        case .needsLicenseAck: showLicenseAck = true
+        case .requestMic:      store.requestMicPermission()
+        case .micDenied:       openAppSettings()
+        case .outOfBand:       break
         }
         return false
     }
@@ -323,6 +325,12 @@ private struct RadioStage: View {
         // sticky PTT so it doesn't show ON AIR or carry over once back in band.
         .onChange(of: txBlocked) { _, blocked in
             if blocked { stickyPttActive = false }
+        }
+        .alert("Amateur radio license required", isPresented: $showLicenseAck) {
+            Button("I'm Licensed") { store.txLicenseAcknowledged = true }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Transmitting requires a valid amateur radio license. Only transmit if you're licensed and on frequencies your license permits.")
         }
         .sheet(isPresented: $showNumpad) {
             FreqNumpad(store: store, currentFreq: freq)

@@ -5,27 +5,36 @@ import Testing
 struct PTTGateTests {
 
     @Test func grantedKeys() {
-        #expect(PTTGate.decide(outOfBand: false, mic: .granted, micRequired: true) == .key)
+        #expect(PTTGate.decide(outOfBand: false, licenseAcked: true, mic: .granted, micRequired: true) == .key)
     }
 
     @Test func undeterminedRequestsInsteadOfKeying() {
-        #expect(PTTGate.decide(outOfBand: false, mic: .undetermined, micRequired: true) == .requestMic)
+        #expect(PTTGate.decide(outOfBand: false, licenseAcked: true, mic: .undetermined, micRequired: true) == .requestMic)
     }
 
     @Test func deniedNeverKeys() {
-        #expect(PTTGate.decide(outOfBand: false, mic: .denied, micRequired: true) == .micDenied)
+        #expect(PTTGate.decide(outOfBand: false, licenseAcked: true, mic: .denied, micRequired: true) == .micDenied)
     }
 
     @Test(arguments: [MicPermission.undetermined, .denied, .granted])
     func outOfBandWins(mic: MicPermission) {
-        #expect(PTTGate.decide(outOfBand: true, mic: mic, micRequired: true) == .outOfBand)
-        #expect(PTTGate.decide(outOfBand: true, mic: mic, micRequired: false) == .outOfBand)
+        for acked in [false, true] {
+            #expect(PTTGate.decide(outOfBand: true, licenseAcked: acked, mic: mic, micRequired: true) == .outOfBand)
+            #expect(PTTGate.decide(outOfBand: true, licenseAcked: acked, mic: mic, micRequired: false) == .outOfBand)
+        }
     }
 
-    // Demo Radio never captures the mic, so permission doesn't gate it.
+    // License confirmation comes before the mic prompt and never keys.
     @Test(arguments: [MicPermission.undetermined, .denied, .granted])
-    func demoIgnoresMic(mic: MicPermission) {
-        #expect(PTTGate.decide(outOfBand: false, mic: mic, micRequired: false) == .key)
+    func unacknowledgedLicenseAsksFirst(mic: MicPermission) {
+        #expect(PTTGate.decide(outOfBand: false, licenseAcked: false, mic: mic, micRequired: true) == .needsLicenseAck)
+    }
+
+    // Demo Radio never captures the mic or transmits, so neither gates it.
+    @Test(arguments: [MicPermission.undetermined, .denied, .granted])
+    func demoIgnoresMicAndLicense(mic: MicPermission) {
+        #expect(PTTGate.decide(outOfBand: false, licenseAcked: false, mic: mic, micRequired: false) == .key)
+        #expect(PTTGate.decide(outOfBand: false, licenseAcked: true, mic: mic, micRequired: false) == .key)
     }
 
     @Test func mapsSystemPermission() {

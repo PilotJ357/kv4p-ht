@@ -93,6 +93,11 @@ class RadioStore {
 
     // ── Voice
     var voiceMode: VoiceMode = .vfo
+    // One-time confirmation that the user holds an amateur license, asked on
+    // the first voice PTT press (see PTTGate). Not asked for the Demo Radio.
+    var txLicenseAcknowledged: Bool = false {
+        didSet { if !isInitializing { UserDefaults.standard.set(txLicenseAcknowledged, forKey: Self.txLicenseAckKey) } }
+    }
     // Desired/applied radio squelch level (0 = monitor). Mirrored from
     // firmware state and sent through RadioModuleController on user changes.
     var squelch: UInt8 = 3 {
@@ -276,6 +281,7 @@ class RadioStore {
         if let s = UserDefaults.standard.object(forKey: Self.squelchKey) as? Int {
             squelch = UInt8(clamping: s)
         }
+        txLicenseAcknowledged = UserDefaults.standard.bool(forKey: Self.txLicenseAckKey)
         isInitializing = false
         configureSpeechManager()
         // Location is only used by features the user opted into.
@@ -363,6 +369,7 @@ class RadioStore {
     private static let aprsSettingsKey = "aprsSettings"
     private static let notifySettingsKey = "aprsNotifySettings"
     private static let squelchKey = "squelchLevel"
+    private static let txLicenseAckKey = "txLicenseAcknowledged"
 
     private struct APRSSettings: Codable {
         var callsign: String
@@ -634,11 +641,12 @@ class RadioStore {
             rfModuleType: hello.rfModuleType)
     }
 
-    // What a voice PTT press does right now. Demo Radio skips the mic check:
-    // it never captures audio (BLEManager only starts the mic for a real
-    // link), so prompting there would ask for access the app doesn't use.
+    // What a voice PTT press does right now. Demo Radio skips the mic and
+    // license checks: it never captures audio (BLEManager only starts the mic
+    // for a real link) and never transmits RF.
     var voicePTTGate: PTTGate.Decision {
-        PTTGate.decide(outOfBand: isTxOutOfBand, mic: micPermission, micRequired: !ble.isDemo)
+        PTTGate.decide(outOfBand: isTxOutOfBand, licenseAcked: txLicenseAcknowledged,
+                       mic: micPermission, micRequired: !ble.isDemo)
     }
 
     var currentOffsetString: String {
