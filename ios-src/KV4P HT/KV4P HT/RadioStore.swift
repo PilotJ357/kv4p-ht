@@ -655,6 +655,32 @@ class RadioStore {
         return abs(currentFreq - aprsFreq) < 0.0005
     }
 
+    // Standard regional APRS frequencies (mirrors the Settings picker).
+    static let knownAprsFrequencies: [Float] = [144.390, 144.575, 144.640, 144.660, 144.800, 145.175, 145.825]
+
+    // APRS counts as active when tuned to the configured APRS frequency or any
+    // standard one — covers the "Current" beacon setting too.
+    var isAprsActive: Bool {
+        isTunedToAprsFreq || Self.knownAprsFrequencies.contains { abs(currentFreq - $0) < 0.0005 }
+    }
+
+    // The Live Activity only shows APRS traffic, so it exists only while the
+    // radio is connected, the user has it enabled, and we're on an APRS freq.
+    // start()/end() are idempotent, so this is safe to call on any change.
+    // Mid-reconnect (scanning/connecting, no device state yet) leaves it as-is.
+    func syncLiveActivity() {
+        let state = ble.bleState
+        if state == .idle || !aprsNotify.liveActivityEnabled {
+            liveActivity.end()
+        } else if state == .ready, ble.deviceState != nil {
+            if isAprsActive {
+                liveActivity.start(enabled: true)
+            } else {
+                liveActivity.end()
+            }
+        }
+    }
+
     var isOnAprsFreq: Bool {
         silenceRxOnAprsFreq && isTunedToAprsFreq
     }
@@ -711,12 +737,10 @@ class RadioStore {
         ble.setAudioSampleHook(nil)
         captionsSuspended = true
         stopCaptions()
-        // Ensure a monitoring Live Activity exists if we're connected — covers
-        // the case where the link was already up before the activity could start
-        // (start() is idempotent). It then renders on the Lock Screen.
-        if ble.bleState == .ready {
-            liveActivity.start(enabled: aprsNotify.liveActivityEnabled)
-        }
+        // Ensure the Live Activity matches current state — covers the case
+        // where the link was already up before the activity could start. It
+        // then renders on the Lock Screen.
+        syncLiveActivity()
     }
 
     func enterForeground() {
