@@ -26,6 +26,7 @@ struct Memory: Identifiable, Codable {
     var isRepeater: Bool
     var notes: String = ""
     var scanEnabled: Bool = true
+    var bandwidth: UInt8 = 0  // 0=wide 25kHz, 1=narrow 12.5kHz (RadioStore.bandwidth encoding)
 
     var freqString: String { String(format: "%.3f", freq) }
     var offsetString: String {
@@ -41,7 +42,7 @@ struct Memory: Identifiable, Codable {
 }
 
 extension Memory {
-    // Custom decode so memories saved before scanEnabled existed still load.
+    // Custom decode so memories saved before scanEnabled/bandwidth existed still load.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -54,6 +55,7 @@ extension Memory {
         isRepeater = try c.decode(Bool.self, forKey: .isRepeater)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         scanEnabled = try c.decodeIfPresent(Bool.self, forKey: .scanEnabled) ?? true
+        bandwidth = try c.decodeIfPresent(UInt8.self, forKey: .bandwidth) ?? 0
     }
 }
 
@@ -851,10 +853,15 @@ class RadioStore {
         refreshMeterGate()
     }
 
+    // Batched so the bandwidth didSet and the channel push go out as one
+    // DesiredState; the controller re-derives TX_ALLOWED for the new margin.
     func applyMemory(_ mem: Memory) {
+        radio.beginUpdate()
         vfoOffset = mem.offset
         vfoToneIndex = ctcssIndex(for: mem.plTone)
+        bandwidth = mem.bandwidth
         sendRadioState(freq: mem.freq)
+        radio.endUpdate()
     }
 
     // Pill-editor entry point: one desired-state push for both fields.
