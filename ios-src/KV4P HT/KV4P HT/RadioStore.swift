@@ -526,6 +526,8 @@ class RadioStore {
     func enterForeground() {
         setupAudioSampleHook()
         ble.recoverAudioIfNeeded()
+        // Settings may have changed location access while we were away.
+        locationManager.refresh()
     }
 
     var scanList: [Memory] { memories.filter(\.scanEnabled) }
