@@ -248,7 +248,7 @@ struct SettingsView: View {
                             }
                             .padding(.trailing, 16)
                             .popover(isPresented: $showAprsSquelchInfo) {
-                                Text("When tuned to your APRS frequency, squelch is automatically opened so APRS packets can always be decoded. Enable this to mute the audio so you don't hear packet noise.")
+                                Text("APRS packets are decoded regardless of squelch. Enable this to mute RX audio while tuned to your APRS frequency so you don't hear packet noise.")
                                     .font(.system(size: 14))
                                     .padding()
                                     .frame(width: 280)
@@ -453,7 +453,7 @@ private struct SquelchSliderRow: View {
                             store.squelch = UInt8(round(pct * 9.0))
                         }
                         .onEnded { _ in
-                            store.radio.setSquelch(store.isTunedToAprsFreq ? 0 : store.squelch)
+                            store.radio.setSquelch(store.squelch)
                         }
                 )
             }
