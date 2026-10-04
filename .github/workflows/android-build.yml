@@ -145,6 +145,7 @@ jobs:
       # Keep the artifact handoff in-repository rather than relying on the
       # composite action, whose pinned upload-artifact@v4 runtime is deprecated.
       - name: Prepare Sonar analysis artifact
+        if: github.repository == 'VanceVagell/kv4p-ht'
         working-directory: ${{ github.workspace }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -156,6 +157,7 @@ jobs:
             | tar --null --files-from=- -cf output.tar
 
       - name: Upload Sonar analysis artifact
+        if: github.repository == 'VanceVagell/kv4p-ht'
         uses: actions/upload-artifact@v7
         with:
           name: sonar-artifact
