@@ -98,6 +98,9 @@ struct ContentView: View {
         .onAppear { store.theme = theme }
         .onChange(of: theme.mode) { _, _ in store.theme = theme }
         .onChange(of: systemColorScheme) { _, _ in store.theme = theme }
+        .onChange(of: store.pendingMapFocusID) { _, id in
+            if id != nil { selectedTab = .map }
+        }
         .onChange(of: scenePhase) { _, phase in
             // .inactive is ignored — it fires for Control Center, incoming
             // calls, etc. Audio/BLE deliberately keep running in background.

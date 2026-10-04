@@ -37,6 +37,19 @@ struct APRSMapView: View {
         }
     }
 
+    // Center the map on a notification-targeted entry and open its detail sheet.
+    private func focusPendingEntry(_ id: UUID?) {
+        guard let id, let entry = store.aprs.entries.first(where: { $0.id == id }),
+              let lat = entry.lat, let lon = entry.lon else { return }
+        withAnimation {
+            position = .region(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)))
+        }
+        selectedEntry = entry
+        store.pendingMapFocusID = nil
+    }
+
     var body: some View {
         ZStack {
             Map(position: $position) {
@@ -94,6 +107,8 @@ struct APRSMapView: View {
             }
         }
         .environment(\.theme, store.theme)
+        .onChange(of: store.pendingMapFocusID) { _, id in focusPendingEntry(id) }
+        .onAppear { focusPendingEntry(store.pendingMapFocusID) }
         .sheet(item: $selectedEntry) { entry in
             NavigationStack {
                 APRSDetailView(store: store, entry: entry) { _ in }
