@@ -116,6 +116,7 @@ private struct VFOBody: View {
 
 private struct RadioStage: View {
     @Environment(\.theme) var t
+    @Environment(\.openURL) private var openURL
     @Bindable var store: RadioStore
     var channelName:  String
     var channelDesc:  String
@@ -128,6 +129,8 @@ private struct RadioStage: View {
 
     @GestureState private var pttDown = false
     @State private var stickyPttActive = false
+    // Hold-to-talk press that actually requested PTT (passed the gate).
+    @State private var holdKeyed = false
     @State private var showNumpad = false
     @State private var showOffsetTone = false
 
@@ -147,6 +150,29 @@ private struct RadioStage: View {
 
     private var txBlocked: Bool {
         store.isTxOutOfBand
+    }
+
+    private var micDenied: Bool {
+        store.voicePTTGate == .micDenied
+    }
+
+    private func sendPTT(_ on: Bool) {
+        store.sendRadioState(freq: Float(freq) ?? 146.52, ptt: on)
+    }
+
+    // Runs the gate for a press that would key. Returns true if PTT went out.
+    private func keyIfAllowed() -> Bool {
+        switch store.voicePTTGate {
+        case .key:        sendPTT(true); return true
+        case .requestMic: store.requestMicPermission()
+        case .micDenied:  openAppSettings()
+        case .outOfBand:  break
+        }
+        return false
+    }
+
+    private func openAppSettings() {
+        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
     }
 
     var body: some View {
@@ -218,36 +244,49 @@ private struct RadioStage: View {
 
             // PTT + controls row
             HStack(spacing: 24) {
-                if store.stickyPTT {
-                    PTTButton(isDown: stickyPttActive, rxOnly: txBlocked)
-                        .onTapGesture {
-                            guard !txBlocked else { return }
-                            stickyPttActive.toggle()
-                            store.sendRadioState(
-                                freq: Float(freq) ?? 146.52,
-                                ptt: stickyPttActive
-                            )
-                        }
-                } else {
-                    PTTButton(isDown: pttDown, rxOnly: txBlocked)
-                        .gesture(
-                            LongPressGesture(minimumDuration: 0.01)
-                                .sequenced(before: DragGesture(minimumDistance: 0))
-                                .updating($pttDown) { _, state, _ in state = true }
-                                .onEnded { _ in
-                                    store.sendRadioState(
-                                        freq: Float(freq) ?? 146.52,
-                                        ptt: false
-                                    )
+                VStack(spacing: 8) {
+                    if store.stickyPTT {
+                        PTTButton(isDown: stickyPttActive, rxOnly: txBlocked, noMic: micDenied)
+                            .onTapGesture {
+                                guard !txBlocked else { return }
+                                if stickyPttActive {
+                                    stickyPttActive = false
+                                    sendPTT(false)
+                                } else {
+                                    stickyPttActive = keyIfAllowed()
                                 }
-                        )
-                        .allowsHitTesting(!txBlocked)
-                        .onChange(of: pttDown) { _, down in
-                            store.sendRadioState(
-                                freq: Float(freq) ?? 146.52,
-                                ptt: down && !txBlocked
+                            }
+                    } else {
+                        PTTButton(isDown: holdKeyed, rxOnly: txBlocked, noMic: micDenied)
+                            .gesture(
+                                LongPressGesture(minimumDuration: 0.01)
+                                    .sequenced(before: DragGesture(minimumDistance: 0))
+                                    .updating($pttDown) { _, state, _ in state = true }
+                                    .onEnded { _ in sendPTT(false) }
                             )
+                            .allowsHitTesting(!txBlocked)
+                            .onChange(of: pttDown) { _, down in
+                                if down {
+                                    holdKeyed = keyIfAllowed()
+                                } else {
+                                    holdKeyed = false
+                                    sendPTT(false)
+                                }
+                            }
+                    }
+                    if micDenied && !txBlocked {
+                        Button(action: openAppSettings) {
+                            Label("Open Settings", systemImage: "gear")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(t.accent)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(t.fill)
+                                .clipShape(Capsule())
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Allow microphone access to transmit voice")
+                    }
                 }
 
                 VStack(spacing: 16) {
@@ -449,12 +488,25 @@ struct PTTButton: View {
     var isDown: Bool
     // TX frequency is outside the amateur band; the button is inert.
     var rxOnly: Bool = false
+    // Microphone access denied; voice PTT can't key. RX ONLY wins if both.
+    var noMic: Bool = false
 
-    private var onAir: Bool { isDown && !rxOnly }
-    private var ringColor: Color { rxOnly ? t.label3 : (onAir ? t.red : t.accent) }
-    private var labelColor: Color { rxOnly ? t.label2 : .white }
+    private var inert: Bool { rxOnly || noMic }
+    private var onAir: Bool { isDown && !inert }
+    private var ringColor: Color { inert ? t.label3 : (onAir ? t.red : t.accent) }
+    private var labelColor: Color { inert ? t.label2 : .white }
+    private var stateLabel: String {
+        if rxOnly { return "RX ONLY" }
+        if noMic { return "NO MIC" }
+        return onAir ? "ON AIR" : "HOLD"
+    }
+    private var a11yLabel: String {
+        if rxOnly { return "Receive only: outside the amateur band" }
+        if noMic { return "Push to talk unavailable: microphone access denied" }
+        return "Push to talk"
+    }
     private var grad: LinearGradient {
-        if rxOnly {
+        if inert {
             return LinearGradient(colors: [t.fill, t.fill2], startPoint: .top, endPoint: .bottom)
         } else if onAir {
             return LinearGradient(colors: [Color(hex: "FF6B61"), t.red], startPoint: .top, endPoint: .bottom)
@@ -476,14 +528,14 @@ struct PTTButton: View {
             Circle()
                 .fill(grad)
                 .frame(width: 132, height: 132)
-                .shadow(color: rxOnly ? .clear : (onAir ? t.red.opacity(0.53) : t.accent.opacity(0.27)), radius: 22)
+                .shadow(color: inert ? .clear : (onAir ? t.red.opacity(0.53) : t.accent.opacity(0.27)), radius: 22)
                 .shadow(color: Color.black.opacity(0.35), radius: 15, y: 10)
                 .overlay(
                     VStack(spacing: 5) {
-                        Image(systemName: rxOnly ? "mic.slash.fill" : "mic.fill")
+                        Image(systemName: inert ? "mic.slash.fill" : "mic.fill")
                             .font(.system(size: 36, weight: .medium))
                             .foregroundStyle(labelColor)
-                        Text(rxOnly ? "RX ONLY" : (onAir ? "ON AIR" : "HOLD"))
+                        Text(stateLabel)
                             .font(.system(size: 11.5, weight: .heavy))
                             .tracking(1.2)
                             .foregroundStyle(labelColor)
@@ -492,7 +544,7 @@ struct PTTButton: View {
         }
         .scaleEffect(onAir ? 0.97 : 1.0)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: onAir)
-        .accessibilityLabel(rxOnly ? "Receive only: outside the amateur band" : "Push to talk")
+        .accessibilityLabel(a11yLabel)
     }
 }
 
