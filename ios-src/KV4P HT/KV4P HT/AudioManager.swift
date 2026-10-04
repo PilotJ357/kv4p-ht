@@ -130,10 +130,9 @@ actor AudioManager {
     // RT-safe one-shot startup gate. Render thread is sole writer (sets true).
     // Actor methods reset to false before engine starts / after engine stops.
     private let started: UnsafeMutablePointer<Bool>
-    // Phone-side (software) squelch gate. The radio runs open (DRA818 squelch 0)
-    // so the firmware AFSK demod always has audio; this flag silences RX
-    // playback when the host-computed RSSI squelch is closed, set from
-    // RadioStore on each device-state update. Render thread is sole reader.
+    // Phone-side RX playback gate. Silences audio while the firmware reports
+    // squelch closed, or while the user has muted RX on the APRS frequency.
+    // Set from RadioStore on each device-state update. Render thread is sole reader.
     private let rxMuted: UnsafeMutablePointer<Bool>
     nonisolated(unsafe) private var playing = false
     // Set when a background engine restart fails ('!pla' etc.) — retried on

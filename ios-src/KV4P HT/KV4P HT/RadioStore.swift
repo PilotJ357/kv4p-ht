@@ -615,7 +615,7 @@ class RadioStore {
         radio.beginUpdate()
         radio.setTxFrequency(rxFreq + (simplexOverride ? 0 : vfoOffset))
         radio.setRxFrequency(rxFreq)
-        radio.setSquelch(isTunedToAprsFreq ? 0 : squelch)
+        radio.setSquelch(squelch)
         radio.setBandwidth(bandwidth == 0 ? DRA818_25K : DRA818_12K5)
         radio.setTxTone(simplexOverride ? 0 : vfoToneIndex)
         radio.setFilters(emphasis: filterPreemphasis, highpass: filterHighPass, lowpass: filterLowPass)
