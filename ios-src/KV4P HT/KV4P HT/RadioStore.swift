@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import CoreLocation
+import AVFoundation
 
 // MARK: - Data Models
 
@@ -216,6 +217,8 @@ class RadioStore {
     }
     var liveCaptions: Bool = true
     var stickyPTT: Bool = false
+    // Re-read on foreground: the user can only change it in Settings.
+    var micPermission = MicPermission(AVAudioApplication.shared.recordPermission)
     var bandwidth: UInt8 = 0 {  // 0=wide 25kHz, 1=narrow 12.5kHz
         didSet {
             if !isInitializing && !isApplyingDeviceStateToUI {
@@ -441,6 +444,13 @@ class RadioStore {
             rfModuleType: hello.rfModuleType)
     }
 
+    // What a voice PTT press does right now. Demo Radio skips the mic check:
+    // it never captures audio (BLEManager only starts the mic for a real
+    // link), so prompting there would ask for access the app doesn't use.
+    var voicePTTGate: PTTGate.Decision {
+        PTTGate.decide(outOfBand: isTxOutOfBand, mic: micPermission, micRequired: !ble.isDemo)
+    }
+
     var currentOffsetString: String {
         let offset = currentTxOffset
         if abs(offset) < 0.0005 { return "Simplex" }
@@ -526,6 +536,20 @@ class RadioStore {
     func enterForeground() {
         setupAudioSampleHook()
         ble.recoverAudioIfNeeded()
+        refreshMicPermission()
+    }
+
+    func refreshMicPermission() {
+        micPermission = MicPermission(AVAudioApplication.shared.recordPermission)
+    }
+
+    // Prompts for the mic. Never keys: the press that triggered it is spent
+    // on the system alert, so the next press transmits.
+    func requestMicPermission() {
+        Task {
+            _ = await AVAudioApplication.requestRecordPermission()
+            refreshMicPermission()
+        }
     }
 
     var scanList: [Memory] { memories.filter(\.scanEnabled) }
