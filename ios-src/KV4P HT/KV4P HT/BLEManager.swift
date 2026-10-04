@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import CoreBluetooth
+import CoreLocation
 
 private let BLE_KISS_SERVICE_UUID = CBUUID(string: "00000001-ba2a-46c9-ae49-01b0961f68bb")
 private let BLE_KISS_TX_CHAR_UUID = CBUUID(string: "00000003-ba2a-46c9-ae49-01b0961f68bb")
@@ -27,6 +28,10 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var bleUnavailable = false
     var audioPlaying = false
     var audioAvailable = false
+    // True while the simulated demo radio stands in for hardware.
+    var isDemo = false
+    // Read on main when demo mode starts; demo stations cluster around it.
+    @ObservationIgnored var demoLocationProvider: (() -> CLLocationCoordinate2D?)?
     // Called on bleQueue with decoded AX.25 frame bytes (no FCS).
     @ObservationIgnored var onAx25Frame: ((Data) -> Void)?
     // Called on bleQueue after HELLO seeding + transport ready, so the app can
@@ -60,6 +65,15 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @ObservationIgnored private var logFlushScheduled = false
     @ObservationIgnored private var transmitting = false
     @ObservationIgnored private var userInitiatedDisconnect = false
+    // Confined to bleQueue. Non-nil while demo mode is active.
+    @ObservationIgnored private var demo: DemoRadio?
+    // Confined to bleQueue. Link-setup watchdog: firmware sends HELLO only on
+    // the CCCD subscribe edge, so if iOS reuses a link the firmware never saw
+    // drop (CCCD still enabled), no HELLO arrives and setup hangs. Bumping
+    // setupToken cancels the pending watchdog.
+    @ObservationIgnored private var helloReceived = false
+    @ObservationIgnored private var resubscribeAttempted = false
+    @ObservationIgnored private var setupToken = 0
 
     init(radio: RadioModuleController) {
         self.radio = radio
@@ -88,16 +102,73 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func connect(_ device: DiscoveredDevice) {
         stopScan()
         onMain { self.bleState = .connecting }
-        userInitiatedDisconnect = false
-        peripheral = device.peripheral
-        peripheral?.delegate = self
-        central.connect(device.peripheral)
-        log("Connecting to \(device.name)...")
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            // Drop a pending auto-reconnect to a different radio; its
+            // didDisconnect is ignored since it's no longer current.
+            if let old = self.peripheral, old.identifier != device.peripheral.identifier {
+                self.peripheral = nil
+                self.central.cancelPeripheralConnection(old)
+            }
+            self.userInitiatedDisconnect = false
+            self.peripheral = device.peripheral
+            device.peripheral.delegate = self
+            self.central.connect(device.peripheral)
+            self.log("Connecting to \(device.name)...")
+        }
     }
 
     func disconnect() {
-        userInitiatedDisconnect = true
-        if let p = peripheral { central.cancelPeripheralConnection(p) }
+        if isDemo { stopDemo(); return }
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            self.userInitiatedDisconnect = true
+            if let p = self.peripheral { self.central.cancelPeripheralConnection(p) }
+        }
+    }
+
+    // MARK: – Demo mode
+
+    // Simulated radio for App Review / trying the app without hardware.
+    // Runs through the same HELLO / desired-state / AX.25 paths as a real
+    // radio, minus BLE, audio and mic capture. Call from main.
+    func connectDemo() {
+        guard !isDemo, peripheral == nil else { return }
+        let center = demoLocationProvider?() ?? DemoRadio.defaultCenter
+        stopScan()
+        isDemo = true
+        bleState = .connecting
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            let demo = DemoRadio(queue: self.bleQueue, center: center)
+            demo.onDeviceState = { [weak self] ds in self?.applyDeviceState(ds) }
+            demo.onAx25Frame = { [weak self] data in self?.deliverAx25Frame(data) }
+            self.demo = demo
+            self.log("Demo mode — simulated radio, nothing is transmitted")
+            // Mimic connect + HELLO latency so the UI walks through its states.
+            self.bleQueue.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self, self.demo === demo else { return }
+                self.applyHello(demo.hello)
+                demo.start()
+            }
+        }
+    }
+
+    private func stopDemo() {
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            self.demo?.stop()
+            self.demo = nil
+            self.radio.detachTransport()
+            self.log("Demo mode ended")
+            // Queued behind any state updates the demo already posted to main.
+            self.onMain {
+                self.isDemo = false
+                self.bleState = .idle
+                self.hello = nil
+                self.deviceState = nil
+            }
+        }
     }
 
     func recoverAudioIfNeeded() {
@@ -111,10 +182,14 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     private func sendDesiredState(_ state: HostDesiredState) {
         bleQueue.async { [weak self] in
             guard let self else { return }
-            let frame = buildKv4pVendorFrame(command: 0x0D, payload: state.encoded())
-            self.gate.submit(frame)
+            if let demo = self.demo {
+                demo.apply(state)
+            } else {
+                let frame = buildKv4pVendorFrame(command: 0x0D, payload: state.encoded())
+                self.gate.submit(frame)
+            }
             let ptt = (state.flags & HOST_STATE_PTT_REQUESTED) != 0
-            if ptt != self.transmitting {
+            if self.demo == nil && ptt != self.transmitting {
                 if ptt {
                     self.startTransmitting()
                 } else {
@@ -133,7 +208,8 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func sendAx25Frame(_ ax25: Data) {
         let frame = buildKissDataFrame(ax25)
         bleQueue.async { [weak self] in
-            self?.gate.submit(frame)
+            guard let self else { return }
+            if let demo = self.demo { demo.receiveAx25(ax25) } else { self.gate.submit(frame) }
         }
         log("→ AX.25 \(ax25.count)B")
     }
@@ -187,7 +263,11 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             onMain { self.bleUnavailable = false }
             log("BLE ready")
         case .poweredOff:
-            onMain { self.bleUnavailable = true; self.bleState = .idle }
+            let demoActive = demo != nil
+            onMain {
+                self.bleUnavailable = true
+                if !demoActive { self.bleState = .idle }
+            }
             log("BLE powered off")
         case .unauthorized:
             onMain { self.bleUnavailable = true }
@@ -213,7 +293,13 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         onMain { self.bleState = .connected }
+        helloReceived = false
+        resubscribeAttempted = false
         log("Connected — discovering services")
+        // Firmware drops unsubscribed clients at 10s; don't wait longer.
+        armSetupWatchdog(after: 10) { [weak self] in
+            self?.dropLinkForRetry("notifications never became active")
+        }
         peripheral.discoverServices([BLE_KISS_SERVICE_UUID])
     }
 
@@ -225,8 +311,15 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        // A radio we already switched away from (see connect()).
+        guard peripheral.identifier == self.peripheral?.identifier else {
+            log("Dropped stale link to \(peripheral.name ?? "radio")")
+            return
+        }
         let shouldReconnect = !userInitiatedDisconnect
         userInitiatedDisconnect = false
+        setupToken &+= 1
+        helloReceived = false
         onMain {
             self.bleState = shouldReconnect ? .connecting : .idle
             self.hello = nil
@@ -246,11 +339,18 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             // stop() must finish before a reconnect's audio.start() —
             // serialize through the actor, then queue the reconnect.
             await self.audio.stop()
-            if shouldReconnect {
-                // CBCentralManager methods are thread-safe; callbacks still
-                // arrive on bleQueue. Pending connects never time out; with
-                // bluetooth-central background mode iOS wakes us when the
-                // radio reappears.
+            guard shouldReconnect else { return }
+            self.bleQueue.async {
+                // User disconnected, picked a radio, or started demo while
+                // audio was stopping — don't fight them.
+                if self.userInitiatedDisconnect {
+                    self.userInitiatedDisconnect = false
+                    self.onMain { self.bleState = .idle }
+                    return
+                }
+                guard self.peripheral == nil, self.demo == nil else { return }
+                // Pending connects never time out; with bluetooth-central
+                // background mode iOS wakes us when the radio reappears.
                 self.peripheral = peripheral
                 peripheral.delegate = self
                 self.central.connect(peripheral)
@@ -264,15 +364,38 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     // MARK: – CBPeripheralDelegate
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let services = peripheral.services else { return }
-        for service in services where service.uuid == BLE_KISS_SERVICE_UUID {
-            peripheral.discoverCharacteristics([BLE_KISS_TX_CHAR_UUID, BLE_KISS_RX_CHAR_UUID], for: service)
+        if let error {
+            dropLinkForRetry("service discovery failed: \(error.localizedDescription)")
+            return
         }
+        guard let service = peripheral.services?.first(where: { $0.uuid == BLE_KISS_SERVICE_UUID }) else {
+            dropLinkForRetry("KISS service missing")
+            return
+        }
+        peripheral.discoverCharacteristics([BLE_KISS_TX_CHAR_UUID, BLE_KISS_RX_CHAR_UUID], for: service)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        guard invalidatedServices.contains(where: { $0.uuid == BLE_KISS_SERVICE_UUID }) else { return }
+        log("KISS service invalidated — rediscovering")
+        txChar = nil
+        rxChar = nil
+        peripheral.discoverServices([BLE_KISS_SERVICE_UUID])
     }
 
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard let chars = service.characteristics else { return }
+        if let error {
+            dropLinkForRetry("characteristic discovery failed: \(error.localizedDescription)")
+            return
+        }
+        guard let chars = service.characteristics,
+              chars.contains(where: { $0.uuid == BLE_KISS_TX_CHAR_UUID }),
+              chars.contains(where: { $0.uuid == BLE_KISS_RX_CHAR_UUID })
+        else {
+            dropLinkForRetry("KISS characteristics missing")
+            return
+        }
         for char in chars {
             switch char.uuid {
             case BLE_KISS_TX_CHAR_UUID:
@@ -291,8 +414,36 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateNotificationStateFor characteristic: CBCharacteristic,
                     error: Error?) {
-        if characteristic.uuid == BLE_KISS_TX_CHAR_UUID && characteristic.isNotifying {
+        guard characteristic.uuid == BLE_KISS_TX_CHAR_UUID, !helloReceived else { return }
+        if let error {
+            dropLinkForRetry("notify subscribe failed: \(error.localizedDescription)")
+            return
+        }
+        if characteristic.isNotifying {
             log("TX notifications active — waiting for HELLO (~1s)")
+            armSetupWatchdog(after: 3) { [weak self] in
+                guard let self else { return }
+                guard !self.resubscribeAttempted else {
+                    self.dropLinkForRetry("no HELLO after resubscribe")
+                    return
+                }
+                // Likely a reused link whose firmware session never ended.
+                // CCCD off→on makes the firmware reset the session and resend
+                // HELLO.
+                self.resubscribeAttempted = true
+                self.log("No HELLO — toggling notifications to restart firmware session")
+                peripheral.setNotifyValue(false, for: characteristic)
+                self.armSetupWatchdog(after: 5) { [weak self] in
+                    self?.dropLinkForRetry("notify toggle stalled")
+                }
+            }
+        } else if resubscribeAttempted {
+            // Give the firmware loop time to observe the unsubscribed state.
+            bleQueue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.peripheral === peripheral, !self.helloReceived,
+                      peripheral.state == .connected else { return }
+                peripheral.setNotifyValue(true, for: characteristic)
+            }
         }
     }
 
@@ -304,15 +455,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         for (cmd, payload) in frames {
             switch cmd {
             case 0x06: handleVendorFrame(payload)
-            case 0x00:
-                if let f = AX25Frame(decoding: payload),
-                   let info = String(data: f.payload, encoding: .ascii)
-                            ?? String(data: f.payload, encoding: .isoLatin1) {
-                    log("← AX.25 \(f.source.display)>\(f.destination.display): \(info.prefix(64))")
-                } else {
-                    log("← AX.25 \(payload.count)B (undecodable)")
-                }
-                onAx25Frame?(payload)
+            case 0x00: deliverAx25Frame(payload)
             default:   break
             }
         }
@@ -329,41 +472,16 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         let command = payload[5]
         let body    = payload.dropFirst(6)
 
+        // A reused link can carry a stale firmware session's audio, window
+        // and state frames before HELLO; they'd seed the controller and gate
+        // with the wrong baseline.
+        if !helloReceived && (command == 0x0C || command == 0x09 || command == 0x0B) { return }
+
         switch command {
         case 0x06:
             if let h = parseHello(Data(body)) {
                 gate.setWindow(Int(h.windowSize))
-                // HELLO = FirmwareVersion + initial DeviceState. Seed both into
-                // the controller and surface the applied state to the UI before
-                // any app-driven changes go out.
-                radio.attachTransport { [weak self] state in self?.sendDesiredState(state) }
-                radio.seedFirmwareInfo(h)
-                radio.seedFromDeviceState(h.deviceState)
-                onMain {
-                    self.hello = h
-                    self.deviceState = h.deviceState
-                    self.bleState = .ready
-                }
-                log(String(format: "← HELLO fw=%d %@ %.0f–%.0f MHz win=%d",
-                    h.firmwareVersion,
-                    h.rfModuleType == 0 ? "VHF" : "UHF",
-                    h.minFreq, h.maxFreq, h.windowSize))
-                Task {
-                    await audio.start()
-                    let playing = await audio.isPlaying
-                    self.onMain { self.audioPlaying = playing }
-                    self.log(playing ? "Audio engine started" : "Audio engine failed to start")
-                }
-                // App-required desired-state changes only; the controller diffs
-                // against the seeded baseline and emits a single update without
-                // overwriting unrelated firmware config.
-                radio.beginUpdate()
-                radio.markTransportReady()
-                radio.setTxAllowed(true)
-                radio.disableHardwareDeemphasis()
-                radio.openAudio()  // ESP32 won't stream audio until RX_AUDIO_OPEN is set
-                radio.endUpdate()
-                onTransportReady?()
+                applyHello(h)
             }
         case 0x0C:
             audioFrameCount += 1
@@ -385,11 +503,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             }
         case 0x0B:
             if let ds = parseDeviceState(Data(body)) {
-                radio.updateDeviceState(ds)
-                onMain {
-                    self.deviceState = ds
-                    self.onDeviceState?(ds)
-                }
+                applyDeviceState(ds)
             }
         case 0x01, 0x02, 0x03:
             // Drop the firmware's periodic loop-frequency spam; keep other debug.
@@ -398,6 +512,81 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         default:
             break
         }
+    }
+
+    // HELLO = FirmwareVersion + initial DeviceState. Seed both into the
+    // controller and surface the applied state to the UI before any
+    // app-driven changes go out. Shared by the BLE and demo transports.
+    private func applyHello(_ h: HelloFrame) {
+        helloReceived = true
+        setupToken &+= 1
+        radio.attachTransport { [weak self] state in self?.sendDesiredState(state) }
+        radio.seedFirmwareInfo(h)
+        radio.seedFromDeviceState(h.deviceState)
+        onMain {
+            self.hello = h
+            self.deviceState = h.deviceState
+            self.bleState = .ready
+        }
+        log(String(format: "← HELLO fw=%d %@ %.0f–%.0f MHz win=%d",
+            h.firmwareVersion,
+            h.rfModuleType == 0 ? "VHF" : "UHF",
+            h.minFreq, h.maxFreq, h.windowSize))
+        if demo == nil {
+            Task {
+                await audio.start()
+                let playing = await audio.isPlaying
+                self.onMain { self.audioPlaying = playing }
+                self.log(playing ? "Audio engine started" : "Audio engine failed to start")
+            }
+        }
+        // App-required desired-state changes only; the controller diffs
+        // against the seeded baseline and emits a single update without
+        // overwriting unrelated firmware config.
+        radio.beginUpdate()
+        radio.markTransportReady()
+        radio.setTxAllowed(true)
+        radio.disableHardwareDeemphasis()
+        radio.openAudio()  // ESP32 won't stream audio until RX_AUDIO_OPEN is set
+        radio.endUpdate()
+        onTransportReady?()
+    }
+
+    private func applyDeviceState(_ ds: DeviceStateFrame) {
+        radio.updateDeviceState(ds)
+        onMain {
+            self.deviceState = ds
+            self.onDeviceState?(ds)
+        }
+    }
+
+    private func deliverAx25Frame(_ payload: Data) {
+        if let f = AX25Frame(decoding: payload),
+           let info = String(data: f.payload, encoding: .ascii)
+                    ?? String(data: f.payload, encoding: .isoLatin1) {
+            log("← AX.25 \(f.source.display)>\(f.destination.display): \(info.prefix(64))")
+        } else {
+            log("← AX.25 \(payload.count)B (undecodable)")
+        }
+        onAx25Frame?(payload)
+    }
+
+    // Runs onStall on bleQueue unless HELLO arrives, the link drops, or a
+    // newer watchdog is armed first.
+    private func armSetupWatchdog(after seconds: Double, onStall: @escaping () -> Void) {
+        setupToken &+= 1
+        let token = setupToken
+        bleQueue.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, self.setupToken == token, !self.helloReceived else { return }
+            onStall()
+        }
+    }
+
+    // Not user-initiated, so didDisconnect queues an auto-reconnect.
+    private func dropLinkForRetry(_ reason: String) {
+        log("Setup stalled (\(reason)) — dropping link to retry")
+        setupToken &+= 1
+        if let p = peripheral { central.cancelPeripheralConnection(p) }
     }
 
     private func writeRaw(_ data: Data) {

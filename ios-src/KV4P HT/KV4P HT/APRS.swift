@@ -6,7 +6,7 @@ import Foundation
 // Scope: position, message/ack, object, weather, Mic-E. NMEA, telemetry and
 // unrecognized packets fall through to .raw.
 
-struct APRSWeather: Codable, Equatable {
+nonisolated struct APRSWeather: Codable, Equatable {
     var temperatureF: Int?
     var windMph: Int?
     var windDirDeg: Int?
@@ -30,7 +30,7 @@ struct APRSWeather: Codable, Equatable {
     }
 }
 
-enum APRSInfo {
+nonisolated enum APRSInfo {
     case position(lat: Double, lon: Double, symbolTable: Character, symbolCode: Character,
                   comment: String, weather: APRSWeather?)
     case message(to: String, body: String, msgNum: String?, isAck: Bool, isRej: Bool)
@@ -39,7 +39,7 @@ enum APRSInfo {
     case raw(String)
 }
 
-func parseAPRSPayload(_ info: Data) -> APRSInfo {
+nonisolated func parseAPRSPayload(_ info: Data) -> APRSInfo {
     guard let text = String(data: info, encoding: .utf8)
             ?? String(data: info, encoding: .isoLatin1),
           let dti = text.first else {
@@ -68,7 +68,7 @@ func parseAPRSPayload(_ info: Data) -> APRSInfo {
 
 // MARK: - Position
 
-private func parsePositionPayload(_ chars: [Character], cursor: Int) -> APRSInfo? {
+nonisolated private func parsePositionPayload(_ chars: [Character], cursor: Int) -> APRSInfo? {
     guard chars.count > cursor else { return nil }
     let first = chars[cursor]
 
@@ -80,12 +80,12 @@ private func parsePositionPayload(_ chars: [Character], cursor: Int) -> APRSInfo
     return nil
 }
 
-private func isCompressedSymbolTable(_ c: Character) -> Bool {
+nonisolated private func isCompressedSymbolTable(_ c: Character) -> Bool {
     c == "/" || c == "\\" || ("A"..."Z").contains(c) || ("a"..."j").contains(c)
 }
 
 // 13 chars: table + 4×base91 lat + 4×base91 lon + code + csT
-private func parseCompressedPosition(_ chars: [Character], cursor: Int) -> APRSInfo? {
+nonisolated private func parseCompressedPosition(_ chars: [Character], cursor: Int) -> APRSInfo? {
     guard chars.count >= cursor + 13 else { return nil }
     var vals = [Int]()
     for i in 1...8 {
@@ -106,7 +106,7 @@ private func parseCompressedPosition(_ chars: [Character], cursor: Int) -> APRSI
 }
 
 // 19 chars: ddmm.mmN T dddmm.mmE C
-private func parseUncompressedPosition(_ chars: [Character], cursor: Int) -> APRSInfo? {
+nonisolated private func parseUncompressedPosition(_ chars: [Character], cursor: Int) -> APRSInfo? {
     guard chars.count >= cursor + 19 else { return nil }
     var buf = Array(chars[cursor..<(cursor + 19)])
 
@@ -145,7 +145,7 @@ private func parseUncompressedPosition(_ chars: [Character], cursor: Int) -> APR
 }
 
 // ddmm.mm → decimal degrees
-private func parseDegMin(_ buf: [Character], cursor: Int, degSize: Int) -> Double? {
+nonisolated private func parseDegMin(_ buf: [Character], cursor: Int, degSize: Int) -> Double? {
     var deg = 0.0
     for i in 0..<degSize {
         guard let d = buf[cursor + i].wholeNumberValue, buf[cursor + i].isNumber else { return nil }
@@ -180,11 +180,11 @@ private func parseDegMin(_ buf: [Character], cursor: Int, degSize: Int) -> Doubl
 // message bits). Position is encoded in the AX.25 destination callsign;
 // longitude/speed/course/symbol are encoded in the info field bytes that
 // follow the DTI. Ported from Android PositionParser.java.
-private func micEBitOne(_ c: Character) -> Bool {
+nonisolated private func micEBitOne(_ c: Character) -> Bool {
     ("A"..."K").contains(c) || ("P"..."Y").contains(c)
 }
 
-func parseMicEPayload(_ info: Data, destCall: String) -> APRSInfo? {
+nonisolated func parseMicEPayload(_ info: Data, destCall: String) -> APRSInfo? {
     let bytes = Array(info)
     guard let dti = bytes.first,
           dti == 0x60 || dti == 0x27 || dti == 0x1c || dti == 0x1d,
@@ -284,7 +284,7 @@ func parseMicEPayload(_ info: Data, destCall: String) -> APRSInfo? {
 
 // MARK: - Message
 
-private func parseMessagePayload(_ text: String) -> APRSInfo? {
+nonisolated private func parseMessagePayload(_ text: String) -> APRSInfo? {
     // ":ADDRESSEE:body{msgnum"  — addressee padded to 9 chars
     guard text.count >= 11 else { return nil }
     let chars = Array(text)
@@ -309,7 +309,7 @@ private func parseMessagePayload(_ text: String) -> APRSInfo? {
 // Per spec an ack/rej body is exactly "ack"/"rej" + 1–5 alphanumeric chars,
 // optionally followed by a reply-ack suffix ("}" + our msgNum). Anything else
 // is ordinary message text (e.g. "acknowledged, see you at 7").
-private func ackMsgNum(_ body: String) -> String? {
+nonisolated private func ackMsgNum(_ body: String) -> String? {
     var num = String(body.dropFirst(3)).trimmingCharacters(in: .whitespaces)
     if let brace = num.firstIndex(of: "}") {
         num = String(num[..<brace])
@@ -322,7 +322,7 @@ private func ackMsgNum(_ body: String) -> String? {
 
 // MARK: - Object
 
-private func parseObjectPayload(_ chars: [Character], text: String) -> APRSInfo? {
+nonisolated private func parseObjectPayload(_ chars: [Character], text: String) -> APRSInfo? {
     // ";NAME_____*DDHHMMz<position><comment>" — name 9 chars, position at 17
     guard chars.count > 29 else { return nil }
     let name = String(chars[1..<10]).trimmingCharacters(in: .whitespaces)
@@ -340,7 +340,7 @@ private func parseObjectPayload(_ chars: [Character], text: String) -> APRSInfo?
 // MARK: - Weather
 
 // Subset of Android's WeatherParser regex patterns.
-private func parseWeatherReport(_ report: String) -> APRSWeather {
+nonisolated private func parseWeatherReport(_ report: String) -> APRSWeather {
     var wx = APRSWeather()
     func firstMatch(_ pattern: String) -> [String]? {
         guard let re = try? NSRegularExpression(pattern: pattern),
@@ -370,7 +370,7 @@ private func parseWeatherReport(_ report: String) -> APRSWeather {
 
 // Mirrors Position.toCompressedString: "/YYYYXXXX$ sT" (base-91).
 // Returned string does NOT include the leading DTI.
-func compressedPositionString(lat: Double, lon: Double,
+nonisolated func compressedPositionString(lat: Double, lon: Double,
                               symbolTable: Character = "/",
                               symbolCode: Character) -> String {
     let latR = (lat * 100000).rounded() / 100000
@@ -391,7 +391,7 @@ func compressedPositionString(lat: Double, lon: Double,
 }
 
 // Mirrors MessagePacket.createMessagePayload.
-func messagePayload(to recipient: String, text: String, msgNum: String?) -> String {
+nonisolated func messagePayload(to recipient: String, text: String, msgNum: String?) -> String {
     let padded = recipient.padding(toLength: 9, withPad: " ", startingAt: 0)
     var idSuffix = ""
     if let num = msgNum?.trimmingCharacters(in: .whitespaces), !num.isEmpty {

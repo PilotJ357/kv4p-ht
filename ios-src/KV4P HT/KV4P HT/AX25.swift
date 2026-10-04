@@ -5,9 +5,9 @@ import Foundation
 // Parser.parseAX25). Frames are exchanged with the firmware as raw bytes
 // without FCS — the ESP32 AFSK modem adds/strips the checksum.
 
-let KV4P_HT_VENDOR_TOCALL = "APKVPA"
+nonisolated let KV4P_HT_VENDOR_TOCALL = "APKVPA"
 
-struct AX25Callsign: Equatable {
+nonisolated struct AX25Callsign: Equatable {
     var base: String        // up to 6 chars, uppercased
     var ssid: UInt8         // 0–15
     var hasBeenRepeated: Bool = false   // '*' flag, bit 0x80 of the SSID byte
@@ -66,12 +66,12 @@ struct AX25Callsign: Equatable {
     }
 }
 
-let defaultDigipeaters: [AX25Callsign] = [
+nonisolated let defaultDigipeaters: [AX25Callsign] = [
     AX25Callsign(base: "WIDE1", ssid: 1),
     AX25Callsign(base: "WIDE2", ssid: 1),
 ]
 
-struct AX25Frame {
+nonisolated struct AX25Frame {
     var destination: AX25Callsign
     var source: AX25Callsign
     var digipeaters: [AX25Callsign]

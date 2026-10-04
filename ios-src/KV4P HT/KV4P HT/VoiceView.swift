@@ -17,6 +17,7 @@ struct VoiceView: View {
         VStack(spacing: 0) {
             DeviceStrip(
                 connected: store.ble.bleState == .ready,
+                demo: store.ble.isDemo,
                 action: { showDevicePicker = true }
             )
 

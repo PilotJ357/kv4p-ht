@@ -294,6 +294,9 @@ class RadioStore {
         notifications.onOpen = { [weak self] entryID, _, _ in
             DispatchQueue.main.async { self?.pendingMapFocusID = entryID }
         }
+        ble.demoLocationProvider = { [weak self] in
+            self?.locationManager.location?.coordinate
+        }
         ble.onAx25Frame = { [weak self] data in
             DispatchQueue.main.async { self?.aprs.handleAx25Frame(data) }
         }

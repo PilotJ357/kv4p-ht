@@ -14,11 +14,16 @@ struct DevicePickerView: View {
         case .scanning:   return "Scanning…"
         case .connecting: return "Connecting…"
         case .connected:  return "Discovering services…"
-        case .ready:      return "Connected"
+        case .ready:      return ble.isDemo ? "Connected to demo radio" : "Connected"
         }
     }
 
     private var scanning: Bool { ble.bleState == .scanning }
+
+    // Demo row stays available unless a real radio holds (or is reaching for) the link.
+    private var showDemo: Bool {
+        ble.isDemo || ble.bleState == .idle || ble.bleState == .scanning
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,7 +59,7 @@ struct DevicePickerView: View {
                             .frame(width: 32, height: 32)
                     }
                 }
-                .disabled(ble.bleState == .connecting || ble.bleState == .connected)
+                .disabled(ble.isDemo || ble.bleState == .connecting || ble.bleState == .connected)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -130,6 +135,15 @@ struct DevicePickerView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .padding(.horizontal, 16)
                     .padding(.bottom, 16)
+                }
+            }
+
+            if showDemo {
+                DemoRadioSection(
+                    connected: ble.isDemo && ble.bleState == .ready,
+                    connecting: ble.isDemo && ble.bleState != .ready
+                ) {
+                    ble.connectDemo()
                 }
             }
 
@@ -238,6 +252,74 @@ private struct DeviceRow: View {
                 Divider().padding(.leading, 70).background(t.sep)
             }
         }
+    }
+}
+
+// MARK: - Demo radio
+
+private struct DemoRadioSection: View {
+    @Environment(\.theme) var t
+    var connected: Bool
+    var connecting: Bool
+    var onTap: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("NO RADIO?")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(t.label3)
+                .padding(.horizontal, 16)
+
+            Button(action: onTap) {
+                HStack(spacing: 14) {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(t.amber.opacity(0.18))
+                        .frame(width: 40, height: 40)
+                        .overlay(
+                            Image(systemName: "play.circle")
+                                .font(.system(size: 19, weight: .medium))
+                                .foregroundStyle(t.amber)
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Demo Radio")
+                            .font(.system(size: 16.5, weight: .semibold))
+                            .foregroundStyle(t.label)
+                        Text("Try the app with a simulated radio")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(t.label3)
+                    }
+
+                    Spacer()
+
+                    if connecting {
+                        ProgressView().tint(t.accent)
+                    } else if connected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(t.green)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(t.label3)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(minHeight: 62)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(connected || connecting)
+            .background(t.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+            Text("Simulated signals and APRS traffic. Nothing is transmitted.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(t.label3)
+                .padding(.horizontal, 16)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
     }
 }
 
