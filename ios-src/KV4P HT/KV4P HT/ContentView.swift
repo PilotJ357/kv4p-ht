@@ -98,6 +98,21 @@ struct ContentView: View {
         .onAppear { store.theme = theme }
         .onChange(of: theme.mode) { _, _ in store.theme = theme }
         .onChange(of: systemColorScheme) { _, _ in store.theme = theme }
+        .onChange(of: store.pendingMapFocusID) { _, id in
+            if id != nil { selectedTab = .map }
+        }
+        .onChange(of: store.ble.bleState) { _, new in
+            // Start a monitoring Live Activity once the radio is ready; end it
+            // when the link drops.
+            if new == .ready {
+                store.liveActivity.start(enabled: store.aprsNotify.liveActivityEnabled)
+            } else if new == .idle {
+                store.liveActivity.end()
+            }
+        }
+        .onOpenURL { url in
+            if url.scheme == "kv4pht", url.host == "aprs" { selectedTab = .aprs }
+        }
         .onChange(of: scenePhase) { _, phase in
             // .inactive is ignored — it fires for Control Center, incoming
             // calls, etc. Audio/BLE deliberately keep running in background.
