@@ -284,8 +284,6 @@ struct SettingsView: View {
                         header: "Audio filters",
                         footer: "Controlled by firmware."
                     ) {
-                        ListRow(title: "Pre- & de-emphasis", isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.filterPreemphasis) as (any View))
                         ListRow(title: "High-pass", isLast: false, dense: true,
                                 accessory: KVToggle(isOn: $store.filterHighPass) as (any View))
                         ListRow(title: "Low-pass",  isLast: false, dense: true,

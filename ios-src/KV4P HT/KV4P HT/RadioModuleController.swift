@@ -148,14 +148,24 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         updateRadioConfig { $0.squelch = squelch }
     }
 
-    func setFilters(emphasis: Bool, highpass: Bool, lowpass: Bool) {
+    /// Firmware (dkaukov v2) bypasses the SA818's own HPF/LPF and runs the
+    /// stop filters in DSP on the voice path: FILTER_LOW cuts below 300 Hz
+    /// (high-pass), FILTER_HIGH cuts above 3 kHz (low-pass). FILTER_PRE is
+    /// never sent — see `disableHardwareDeemphasis()`.
+    func setFilters(highpass: Bool, lowpass: Bool) {
         withLock {
             var flags = _desiredState.flags & ~(HOST_STATE_FILTER_PRE | HOST_STATE_FILTER_HIGH | HOST_STATE_FILTER_LOW)
-            if emphasis { flags |= HOST_STATE_FILTER_PRE }
-            if highpass { flags |= HOST_STATE_FILTER_HIGH }
-            if lowpass  { flags |= HOST_STATE_FILTER_LOW }
+            if highpass { flags |= HOST_STATE_FILTER_LOW }
+            if lowpass  { flags |= HOST_STATE_FILTER_HIGH }
             updateDesiredState { $0.flags = flags }
         }
+    }
+
+    /// SA818 de-emphasis strips the 3.5–4 kHz noise the firmware soft squelch
+    /// keys on, so squelch never closes. Clears a FILTER_PRE persisted in
+    /// firmware NVS by older app builds.
+    func disableHardwareDeemphasis() {
+        setDesiredFlag(HOST_STATE_FILTER_PRE, false)
     }
 
     func setHighPower(_ isHighPower: Bool) {
