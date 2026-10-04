@@ -10,6 +10,7 @@ struct MoreView: View {
     @State private var showDeviceInfo = false
     @State private var showPosition = false
     @State private var showBandPlan = false
+    @State private var showPrivacy = false
 
     private struct Tile { var icon: String; var label: String; var color: String }
     private let tiles: [Tile] = [
@@ -83,6 +84,14 @@ struct MoreView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        Button { showPrivacy = true } label: {
+                            ListRow(
+                                title: "Privacy",
+                                leading: IconTile(color: t.green, systemImage: "hand.raised.fill") as (any View),
+                                isLast: false
+                            )
+                        }
+                        .buttonStyle(.plain)
                         ListRow(
                             title: "About kv4p HT",
                             leading: IconTile(color: t.accent, systemImage: "info.circle") as (any View),
@@ -132,6 +141,15 @@ struct MoreView: View {
         .sheet(isPresented: $showPosition) {
             NavigationStack {
                 BeaconSettingsView(store: store)
+            }
+            .environment(\.theme, store.theme)
+            .preferredColorScheme(store.theme.isDark ? .dark : .light)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showPrivacy) {
+            NavigationStack {
+                PrivacyPolicyView()
             }
             .environment(\.theme, store.theme)
             .preferredColorScheme(store.theme.isDark ? .dark : .light)
@@ -212,6 +230,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
     @State private var showAprsSquelchInfo = false
+    @State private var showOnDeviceUnavailable = false
 
     private let aprsFrequencies = ["Current", "144.3900", "144.5750", "144.6400", "144.6600", "144.8000", "145.1750", "145.8250"]
     private let aprsFrequencyLabels = [
@@ -304,14 +323,23 @@ struct SettingsView: View {
                         ListRow(title: "Language", value: store.captionLanguage, isLast: true)
                     }
                     .onChange(of: store.liveCaptions) { _, enabled in
-                        if enabled && !store.speechManager.isAuthorized {
+                        guard enabled else { return }
+                        store.speechManager.configure(language: store.captionLanguage)
+                        guard store.speechManager.supportsOnDeviceRecognition else {
+                            store.liveCaptions = false
+                            showOnDeviceUnavailable = true
+                            return
+                        }
+                        if !store.speechManager.isAuthorized {
                             store.speechManager.requestAuthorization { granted in
                                 if !granted { store.liveCaptions = false }
                             }
                         }
-                        if enabled {
-                            store.speechManager.configure(language: store.captionLanguage)
-                        }
+                    }
+                    .alert("Captions unavailable", isPresented: $showOnDeviceUnavailable) {
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text("This device doesn't support on-device speech recognition for \(store.captionLanguage). Live captions only run on-device, so radio audio is never sent to Apple's servers.")
                     }
 
                     // Appearance
@@ -630,6 +658,12 @@ struct BeaconSettingsView: View {
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
     @State private var beaconStatus: String? = nil
+    @State private var consentAction: ConsentAction? = nil
+
+    // What to do once the user accepts the public-broadcast disclosure.
+    private enum ConsentAction { case enableBeacon, beaconNow }
+
+    static let consentMessage = "Position beacons transmit your callsign and location over the air on APRS. Anyone listening can receive them, and internet gateways (iGates) relay them to public websites such as aprs.fi, where they are archived and can't be deleted.\n\nBeacons are sent at the chosen interval while the radio is connected, including when the app is in the background. Turn on Approximate position to round your location to about 1 km."
 
     // Curated APRS symbols (table "/"), mirroring Android's APRSIconType subset.
     private static let symbols: [(code: String, label: String)] = [
@@ -645,10 +679,10 @@ struct BeaconSettingsView: View {
                 VStack(spacing: 4) {
                     ListGroupView(
                         header: "Position beacon",
-                        footer: "Periodically transmits your GPS position via APRS. Requires a callsign and APRS frequency configured in Settings. Beaconing only runs while the app is open."
+                        footer: "Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected, including in the background. Requires a callsign and APRS frequency configured in Settings."
                     ) {
                         ListRow(title: "Beacon position", isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.aprsBeaconEnabled) as (any View))
+                                accessory: KVToggle(isOn: beaconEnabledBinding) as (any View))
                         PickerRow(title: "Interval",
                                   selection: Binding(
                                       get: { "\(store.aprsBeaconIntervalMin) min" },
@@ -674,14 +708,10 @@ struct BeaconSettingsView: View {
                     }
 
                     Button {
-                        beaconStatus = "Sending…"
-                        Task {
-                            let result = await store.aprs.sendPositionBeacon()
-                            switch result {
-                            case .sent:       beaconStatus = "Beacon sent"
-                            case .noLocation: beaconStatus = "Waiting for GPS fix — try again"
-                            case .notReady:   beaconStatus = "Not connected or no callsign set"
-                            }
+                        if store.aprsBeaconConsented {
+                            sendBeaconNow()
+                        } else {
+                            consentAction = .beaconNow
                         }
                     } label: {
                         HStack {
@@ -704,6 +734,16 @@ struct BeaconSettingsView: View {
                             .foregroundStyle(t.label2)
                             .padding(.top, 4)
                     }
+
+                    if store.aprsBeaconConsented {
+                        Button("Stop sharing my position") {
+                            store.aprsBeaconConsented = false
+                            beaconStatus = nil
+                        }
+                        .font(.system(size: 15))
+                        .foregroundStyle(t.red)
+                        .padding(.top, 16)
+                    }
                 }
                 .padding(.bottom, 32)
             }
@@ -711,6 +751,24 @@ struct BeaconSettingsView: View {
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Position & Beacon")
         .navigationBarTitleDisplayMode(.large)
+        .alert("Share your position publicly?",
+               isPresented: Binding(get: { consentAction != nil },
+                                    set: { if !$0 { consentAction = nil } }),
+               presenting: consentAction) { action in
+            Button("Share Position") {
+                store.aprsBeaconConsented = true
+                switch action {
+                case .enableBeacon:
+                    store.aprsBeaconEnabled = true
+                    store.locationManager.requestLocation()
+                case .beaconNow:
+                    sendBeaconNow()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(Self.consentMessage)
+        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { dismiss() } label: {
@@ -724,6 +782,33 @@ struct BeaconSettingsView: View {
             }
         }
         .environment(\.theme, store.theme)
+    }
+
+    // Turning beaconing on requires the one-time public-broadcast consent.
+    private var beaconEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.aprsBeaconEnabled },
+            set: { on in
+                if on && !store.aprsBeaconConsented {
+                    consentAction = .enableBeacon
+                } else {
+                    store.aprsBeaconEnabled = on
+                    if on { store.locationManager.requestLocation() }
+                }
+            })
+    }
+
+    private func sendBeaconNow() {
+        beaconStatus = "Sending…"
+        Task {
+            let result = await store.aprs.sendPositionBeacon()
+            switch result {
+            case .sent:       beaconStatus = "Beacon sent"
+            case .noLocation: beaconStatus = "Waiting for GPS fix — try again"
+            case .notReady:   beaconStatus = "Not connected or no callsign set"
+            case .noConsent:  beaconStatus = nil
+            }
+        }
     }
 }
 
@@ -932,7 +1017,10 @@ struct APRSNotificationsView: View {
                 guard let mi = store.aprsNotify.distanceFilterMi else { return "Off" }
                 return "\(Int(mi)) mi"
             },
-            set: { store.aprsNotify.distanceFilterMi = Double($0.dropLast(3)) })  // nil for "Off"
+            set: {
+                store.aprsNotify.distanceFilterMi = Double($0.dropLast(3))  // nil for "Off"
+                if store.aprsNotify.distanceFilterMi != nil { store.locationManager.requestLocation() }
+            })
     }
 
     private var cooldownBinding: Binding<String> {

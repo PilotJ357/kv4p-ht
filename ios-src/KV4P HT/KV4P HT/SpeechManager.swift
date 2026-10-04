@@ -52,16 +52,21 @@ class SpeechManager {
         SFSpeechRecognizer.authorizationStatus() == .authorized
     }
 
+    // Captions are on-device only: without local support SFSpeechRecognizer
+    // would stream received audio to Apple's servers, so we don't run at all.
+    var supportsOnDeviceRecognition: Bool {
+        recognizer?.supportsOnDeviceRecognition ?? false
+    }
+
     func startSegment() {
-        guard let recognizer, recognizer.isAvailable else { return }
+        guard let recognizer, recognizer.isAvailable,
+              recognizer.supportsOnDeviceRecognition else { return }
         endSegment()
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
+        request.requiresOnDeviceRecognition = true
         request.contextualStrings = Self.hamVocab
         currentRequest = request
         activeRequest = request
