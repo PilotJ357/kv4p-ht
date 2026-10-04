@@ -11,6 +11,10 @@ import Foundation
 /// `updateDeviceState(_:)`, which tracks applied-state sync and retries the
 /// last sent desired state (up to `maxDesiredStateRetries`) on mismatch.
 ///
+/// TX_ALLOWED is derived here, not set by callers: every desired-state change
+/// re-checks the TX frequency and bandwidth against `BandPlan` for the HELLO
+/// module type (Android calls `updateTxAllowed` on each tune instead).
+///
 /// Thread-safe: setters may be called from the main thread while transport
 /// callbacks arrive on bleQueue. The injected send callback is invoked while
 /// the internal lock is held, so it must not call back into this class
@@ -83,7 +87,10 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     // MARK: - Seeding from HELLO
 
     func seedFirmwareInfo(_ hello: HelloFrame) {
-        withLock { firmwareInfo = hello }
+        withLock {
+            firmwareInfo = hello
+            updateDesiredState { _ in }  // module type moves the TX band
+        }
     }
 
     func seedFromDeviceState(_ state: DeviceStateFrame) {
@@ -96,6 +103,8 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
             lastDesiredStateSent = withFlags(_desiredState, _desiredState.flags & ~HOST_STATE_ENABLE_STATUS_REPORTS)
             _appliedStateInSync = isDeviceStateInSync(state, with: lastDesiredStateSent)
             desiredStateRetries = 0
+            // Firmware persists TX_ALLOWED in NVS; re-derive it for this tune.
+            applyTxPolicy(&_desiredState)
         }
     }
 
@@ -176,10 +185,6 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         setDesiredFlag(HOST_STATE_RSSI_ENABLED, on)
     }
 
-    func setTxAllowed(_ allowed: Bool) {
-        setDesiredFlag(HOST_STATE_TX_ALLOWED, allowed)
-    }
-
     func openAudio() {
         withLock {
             updateDesiredState { $0.flags |= HOST_STATE_RX_AUDIO_OPEN | HOST_STATE_ENABLE_STATUS_REPORTS }
@@ -204,12 +209,14 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         withLock {
             lastPhysPttDown = isPhysPttDown
             lastDeviceState = state
+            var adopted = false
             if isDeviceStateInSync(state, with: lastDesiredStateSent) {
                 _appliedStateInSync = true
             } else if let lastSent = lastDesiredStateSent, state.appliedSequence > lastSent.sequence {
                 _desiredState = desiredBaseline(from: state, clearingRuntimeRequests: false)
                 lastDesiredStateSent = _desiredState
                 _appliedStateInSync = true
+                adopted = true
             } else {
                 _appliedStateInSync = false
             }
@@ -218,6 +225,8 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
             } else {
                 retryDesiredStateIfNeeded()
             }
+            // Adopted firmware flags may carry a TX_ALLOWED this tune doesn't earn.
+            if adopted { updateDesiredState { _ in } }
         }
     }
 
@@ -236,6 +245,12 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     var isHighPowerEnabled: Bool { hasDesiredFlag(HOST_STATE_HIGH_POWER) }
     var isTxAllowed: Bool { hasDesiredFlag(HOST_STATE_TX_ALLOWED) }
     var desiredSquelch: UInt8 { withLock { _desiredState.squelch } }
+
+    /// Band check for a TX frequency other than the desired one (e.g. an
+    /// APRS beacon frequency) at the desired bandwidth. False before HELLO.
+    func canTransmit(onFrequency freq: Float) -> Bool {
+        withLock { canTransmit(onFrequency: freq, bandwidth: _desiredState.bw) }
+    }
 
     var isPhysPttDown: Bool { hasDeviceFlag(DEVICE_STATE_PHYS_PTT_DOWN) }
     var isSquelched: Bool { hasDeviceFlag(DEVICE_STATE_SQUELCHED) }
@@ -353,9 +368,29 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     private func updateDesiredState(_ change: (inout HostDesiredState) -> Void) {
         var next = _desiredState
         change(&next)
+        applyTxPolicy(&next)
         if next != _desiredState {
             _desiredState = next
             sendDesiredStateIfChanged()
+        }
+    }
+
+    private func canTransmit(onFrequency freq: Float, bandwidth: UInt8) -> Bool {
+        guard let firmwareInfo else { return false }
+        return BandPlan.canTransmit(onFrequency: freq, bandwidth: bandwidth,
+                                    rfModuleType: firmwareInfo.rfModuleType)
+    }
+
+    // Firmware gates PTT and AX.25 TX on TX_ALLOWED alone. Dropping it also
+    // drops any PTT request, so a held/sticky PTT can't follow a tune out of
+    // band and key up later when the flag returns.
+    private func applyTxPolicy(_ state: inout HostDesiredState) {
+        let allowed = (state.flags & HOST_STATE_RADIO_CONFIG_VALID) != 0
+            && canTransmit(onFrequency: state.freqTx, bandwidth: state.bw)
+        if allowed {
+            state.flags |= HOST_STATE_TX_ALLOWED
+        } else {
+            state.flags &= ~(HOST_STATE_TX_ALLOWED | HOST_STATE_PTT_REQUESTED)
         }
     }
 
