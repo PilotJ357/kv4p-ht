@@ -188,6 +188,7 @@ struct AddMemoryView: View {
     @State private var offsetText = "0"
     @State private var toneValue: Float = 0
     @State private var scanEnabled = true
+    @State private var bandwidth: UInt8 = 0
 
     init(store: RadioStore, editing: Memory? = nil) {
         self.store = store
@@ -199,6 +200,7 @@ struct AddMemoryView: View {
             _offsetText = State(initialValue: m.offset == 0 ? "0" : String(format: "%.3f", m.offset))
             _toneValue = State(initialValue: m.plTone)
             _scanEnabled = State(initialValue: m.scanEnabled)
+            _bandwidth = State(initialValue: m.bandwidth)
         }
     }
 
@@ -215,12 +217,14 @@ struct AddMemoryView: View {
             updated.plTone = toneValue
             updated.isRepeater = offset != 0
             updated.scanEnabled = scanEnabled
+            updated.bandwidth = bandwidth
             store.updateMemory(updated)
         } else {
             store.memories.append(Memory(
                 name: name, group: group, freq: freq, offset: offset,
                 plTone: toneValue, squelch: 2,
-                isRepeater: offset != 0, scanEnabled: scanEnabled
+                isRepeater: offset != 0, scanEnabled: scanEnabled,
+                bandwidth: bandwidth
             ))
         }
         dismiss()
@@ -251,6 +255,10 @@ struct AddMemoryView: View {
                         )
                     }
 
+                    ListGroupView(header: "Transmit") {
+                        BandwidthPickerRow(bandwidth: $bandwidth)
+                    }
+
                     ListGroupView(header: "Scan") {
                         ListRow(
                             title: "Include in Scan",
@@ -273,6 +281,28 @@ struct AddMemoryView: View {
                 }
             }
         }
+    }
+}
+
+private struct BandwidthPickerRow: View {
+    @Environment(\.theme) var t
+    @Binding var bandwidth: UInt8
+
+    var body: some View {
+        HStack {
+            Text("Bandwidth")
+                .font(.system(size: 16.5))
+                .foregroundStyle(t.label)
+            Spacer()
+            Picker("Bandwidth", selection: $bandwidth) {
+                Text("Wide").tag(UInt8(0))
+                Text("Narrow").tag(UInt8(1))
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 160)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 46)
     }
 }
 
