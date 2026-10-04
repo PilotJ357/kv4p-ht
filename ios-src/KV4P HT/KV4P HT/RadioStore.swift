@@ -655,6 +655,8 @@ class RadioStore {
         // resumes captions if a signal is still being received.
         refreshCaptionsStatus()
         refreshMicPermission()
+        // Settings may have changed location access while we were away.
+        locationManager.refresh()
     }
 
     func refreshMicPermission() {
