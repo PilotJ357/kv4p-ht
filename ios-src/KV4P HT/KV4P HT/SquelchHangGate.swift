@@ -61,25 +61,3 @@ nonisolated struct SquelchHangGate {
         closeDeadline = nil
     }
 }
-
-// How soon to start a new recognition segment after the current one ended
-// on its own while the signal may still be present.
-nonisolated enum CaptionRestartPolicy {
-    enum Ending: Equatable {
-        // Recognizer emitted isFinal (e.g. after a pause in speech).
-        case finished
-        // Recognizer reported an error.
-        case failed
-        // startSegment() refused (not authorized, model not ready).
-        case startFailed
-    }
-
-    static func delay(after ending: Ending, retryDelay: Duration) -> Duration {
-        switch ending {
-        // A normal finish is not a failure: any wait drops live audio.
-        case .finished: return .zero
-        // Back off so a persistent failure can't spin.
-        case .failed, .startFailed: return retryDelay
-        }
-    }
-}
