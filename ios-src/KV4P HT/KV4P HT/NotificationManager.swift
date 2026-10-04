@@ -121,10 +121,14 @@ final class NotificationManager: NSObject, APRSNotifying, UNUserNotificationCent
     private let center = UNUserNotificationCenter.current()
     // Per-(callsign,kind) last-fired timestamps for the cooldown throttle.
     private var lastNotified: [String: Date] = [:]
+    // Non-nil during a demo session: the real cooldowns to restore, and the
+    // demo notifications posted so far (removed when the session ends).
+    private var demoSession: (cooldowns: [String: Date], posted: [String])?
 
     // Wired by RadioStore so notification actions can act on the controller.
     var onReply: ((_ to: String, _ text: String) -> Void)?
-    var onMute:  ((_ callsignBase: String) -> Void)?
+    // fromDemo: the notification came from the current demo session.
+    var onMute:  ((_ callsignBase: String, _ fromDemo: Bool) -> Void)?
     var onOpen:  ((_ entryID: UUID?, _ lat: Double?, _ lon: Double?) -> Void)?
 
     func configure() {
@@ -165,6 +169,23 @@ final class NotificationManager: NSObject, APRSNotifying, UNUserNotificationCent
         }
     }
 
+    // MARK: Demo session
+
+    func beginDemoSession() {
+        guard demoSession == nil else { return }
+        demoSession = (lastNotified, [])
+    }
+
+    // Restores the real cooldowns and clears the demo's notifications so a
+    // stale Reply / Mute can't act on a fictional station after the demo.
+    func endDemoSession() {
+        guard let session = demoSession else { return }
+        demoSession = nil
+        lastNotified = session.cooldowns
+        center.removeDeliveredNotifications(withIdentifiers: session.posted)
+        center.removePendingNotificationRequests(withIdentifiers: session.posted)
+    }
+
     // MARK: Delivery
 
     func consider(_ entry: APRSEntry, settings: APRSNotifySettings,
@@ -197,6 +218,10 @@ final class NotificationManager: NSObject, APRSNotifying, UNUserNotificationCent
 
         var info: [String: Any] = ["entryID": entry.id.uuidString,
                                    "from": entry.fromCallsign]
+        if demoSession != nil {
+            demoSession?.posted.append(entry.id.uuidString)
+            info["demo"] = true
+        }
         if let lat = entry.lat { info["lat"] = lat }
         if let lon = entry.lon { info["lon"] = lon }
         content.userInfo = info
@@ -224,15 +249,22 @@ final class NotificationManager: NSObject, APRSNotifying, UNUserNotificationCent
         let entryID = (info["entryID"] as? String).flatMap(UUID.init)
         let lat = info["lat"] as? Double
         let lon = info["lon"] as? Double
+        // A demo notification acted on after its session ended (or after a
+        // relaunch) must not reach the real radio or settings.
+        let fromDemo = info["demo"] as? Bool ?? false
+        let staleDemo = fromDemo
+            && demoSession?.posted.contains(response.notification.request.identifier) != true
 
         switch response.actionIdentifier {
+        case Self.replyAction where staleDemo, Self.muteAction where staleDemo:
+            break
         case Self.replyAction:
             if let text = (response as? UNTextInputNotificationResponse)?.userText,
                !text.isEmpty, !from.isEmpty {
                 onReply?(from, text)  // reply to the sender's full callsign+SSID
             }
         case Self.muteAction:
-            if !from.isEmpty { onMute?(NotifyGate.baseCallsign(from)) }
+            if !from.isEmpty { onMute?(NotifyGate.baseCallsign(from), fromDemo) }
         case Self.openAction, UNNotificationDefaultActionIdentifier:
             onOpen?(entryID, lat, lon)
         default:

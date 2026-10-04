@@ -40,6 +40,9 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     // Fired (on main) after each device-state frame is applied, so the host can
     // re-evaluate the RSSI-based software squelch.
     @ObservationIgnored var onDeviceState: ((DeviceStateFrame) -> Void)?
+    // Fired on main when demo mode starts (true) — before any demo frame is
+    // delivered — and ends (false), after the last one.
+    @ObservationIgnored var onDemoSessionChanged: ((Bool) -> Void)?
 
     private let bleQueue = DispatchQueue(label: "kv4p-ht.ble", qos: .userInitiated)
     private let audio = AudioManager()
@@ -137,6 +140,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         let center = demoLocationProvider?() ?? DemoRadio.defaultCenter
         stopScan()
         isDemo = true
+        onDemoSessionChanged?(true)
         bleState = .connecting
         bleQueue.async { [weak self] in
             guard let self else { return }
@@ -164,6 +168,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             // Queued behind any state updates the demo already posted to main.
             self.onMain {
                 self.isDemo = false
+                self.onDemoSessionChanged?(false)
                 self.bleState = .idle
                 self.hello = nil
                 self.deviceState = nil
