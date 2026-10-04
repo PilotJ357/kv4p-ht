@@ -370,16 +370,11 @@ actor AudioManager {
 
     // MARK: – TX Mic Capture
 
+    // Permission is requested up front by the PTT gate (RadioStore.voicePTTGate)
+    // so the radio never keys while the system prompt is on screen.
     func startMicCapture(handler: @escaping (Data) -> Void) async {
-        let granted = AVAudioApplication.shared.recordPermission == .granted
-        if !granted {
-            AVAudioApplication.requestRecordPermission { [weak self] ok in
-                guard ok, let self else {
-                    print("[AudioManager] mic permission denied")
-                    return
-                }
-                Task { await self.installMicTap(handler: handler) }
-            }
+        guard AVAudioApplication.shared.recordPermission == .granted else {
+            print("[AudioManager] startMicCapture: mic permission not granted")
             return
         }
         await installMicTap(handler: handler)

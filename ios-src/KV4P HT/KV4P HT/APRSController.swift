@@ -111,14 +111,23 @@ class APRSController {
 
     var entries: [APRSEntry] = []
 
-    @ObservationIgnored private let persistence: APRSPersistence
+    // The durable store; `persistence` points at a throwaway in-memory store
+    // instead while a demo session runs.
+    @ObservationIgnored private let realPersistence: APRSPersistence
+    @ObservationIgnored private var persistence: APRSPersistence
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var beaconTimer: Timer?
     @ObservationIgnored private var retryTimer: Timer?
     @ObservationIgnored private var messageNumber: Int
+    // Real counter parked while demo messages draw from a scratch copy.
+    @ObservationIgnored private var realMessageNumber: Int?
+    // Bumped on each demo start/stop so delayed work (acks) from one session
+    // never fires into the next — e.g. an ack to a DEMO station over real RF.
+    @ObservationIgnored private var sessionGeneration = 0
 
     init(persistence: APRSPersistence = APRSPersistence(),
          defaults: UserDefaults = .standard) {
+        self.realPersistence = persistence
         self.persistence = persistence
         self.defaults = defaults
         messageNumber = defaults.object(forKey: Self.msgNumKey) as? Int
@@ -128,8 +137,35 @@ class APRSController {
             persistence.migrateLegacyEntries(data)
             defaults.removeObject(forKey: Self.legacyEntriesKey)
         }
+        // Builds before demo isolation persisted demo traffic; drop it.
+        persistence.purgeDemoTraffic()
         entries = persistence.loadEntries(max: Self.maxEntries)
         startRetryTimer()
+    }
+
+    // MARK: - Demo session
+
+    var isDemoSession: Bool { realMessageNumber != nil }
+
+    // Demo traffic is fictional: route it to an in-memory store that's
+    // discarded on exit, so it never reaches the real history (or its dedupe
+    // frames) even if the app is killed mid-demo. Real history is hidden for
+    // the session and restored by endDemoSession().
+    func beginDemoSession() {
+        guard !isDemoSession else { return }
+        sessionGeneration &+= 1
+        realMessageNumber = messageNumber
+        persistence = APRSPersistence(inMemory: true)
+        entries = []
+    }
+
+    func endDemoSession() {
+        guard let saved = realMessageNumber else { return }
+        sessionGeneration &+= 1
+        realMessageNumber = nil
+        messageNumber = saved
+        persistence = realPersistence
+        entries = persistence.loadEntries(max: Self.maxEntries)
     }
 
     private func append(_ entry: APRSEntry, frameHash: String? = nil) {
@@ -425,9 +461,11 @@ class APRSController {
     // Delay before acking (matches Android) so we don't key up while
     // digipeated copies of the message are still on the air.
     private func scheduleAck(to: String, msgNum: String) {
+        let generation = sessionGeneration
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1))
-            self?.sendAck(to: to, msgNum: msgNum)
+            guard let self, self.sessionGeneration == generation else { return }
+            self.sendAck(to: to, msgNum: msgNum)
         }
     }
 
@@ -451,7 +489,7 @@ class APRSController {
         if messageNumber > Self.maxMessageNum { messageNumber = 0 }
         let num = String(messageNumber)
         messageNumber += 1
-        defaults.set(messageNumber, forKey: Self.msgNumKey)
+        if !isDemoSession { defaults.set(messageNumber, forKey: Self.msgNumKey) }
 
         guard transmitPayload(messagePayload(to: target, text: outText, msgNum: num))
         else { return false }

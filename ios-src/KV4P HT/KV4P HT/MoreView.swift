@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 // MARK: - More Tab
 
@@ -115,7 +116,8 @@ struct SettingsView: View {
     @Bindable var store: RadioStore
     var backLabel = "More"  // tab the sheet was opened from
     @State private var showAprsSquelchInfo = false
-    @State private var showOnDeviceUnavailable = false
+    @State private var captionsAlert: CaptionsStatus? = nil
+    @Environment(\.openURL) private var openURL
 
     private let aprsFrequencies = ["Current", "144.3900", "144.5750", "144.6400", "144.6600", "144.8000", "145.1750", "145.8250"]
     private let aprsFrequencyLabels = [
@@ -128,6 +130,20 @@ struct SettingsView: View {
         "145.1750 (Australia, alt)",
         "145.8250 (ISS/satellite)",
     ]
+
+    private var captionsFooter: String {
+        let onDevice = "On-device speech recognition. No data sent to the cloud."
+        switch store.captionsStatus {
+        case .denied, .restricted, .unavailable:
+            return store.captionsStatus.message(language: store.captionLanguage) ?? onDevice
+        case .off, .needsPermission, .listening:
+            return onDevice
+        }
+    }
+
+    private func openAppSettings() {
+        openURL(CaptionsStatus.appSettingsURL)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -200,29 +216,41 @@ struct SettingsView: View {
                     // Transcription
                     ListGroupView(
                         header: "Transcription",
-                        footer: "On-device speech recognition. No data sent to the cloud."
+                        footer: captionsFooter
                     ) {
-                        ListRow(title: "Live captions",     isLast: true, dense: true,
+                        ListRow(title: "Live captions",
+                                isLast: !store.captionsStatus.opensSettings, dense: true,
                                 accessory: KVToggle(isOn: $store.liveCaptions) as (any View))
+                        if store.captionsStatus.opensSettings {
+                            Button(action: openAppSettings) {
+                                ListRow(title: "Allow in Settings", isLast: true, dense: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
+                    // Turning captions on asks for speech permission (in
+                    // RadioStore); if it can't work, say why right away.
                     .onChange(of: store.liveCaptions) { _, enabled in
                         guard enabled else { return }
-                        store.speechManager.configure(language: store.captionLanguage)
-                        guard store.speechManager.supportsOnDeviceRecognition else {
-                            store.liveCaptions = false
-                            showOnDeviceUnavailable = true
-                            return
-                        }
-                        if !store.speechManager.isAuthorized {
-                            store.speechManager.requestAuthorization { granted in
-                                if !granted { store.liveCaptions = false }
-                            }
+                        switch store.captionsStatus {
+                        case .denied, .restricted, .unavailable:
+                            captionsAlert = store.captionsStatus
+                        default:
+                            break
                         }
                     }
-                    .alert("Captions unavailable", isPresented: $showOnDeviceUnavailable) {
-                        Button("OK", role: .cancel) {}
-                    } message: {
-                        Text("This device doesn't support on-device speech recognition for \(store.captionLanguage). Live captions only run on-device, so radio audio is never sent to Apple's servers.")
+                    .alert("Captions unavailable",
+                           isPresented: Binding(get: { captionsAlert != nil },
+                                                set: { if !$0 { captionsAlert = nil } }),
+                           presenting: captionsAlert) { status in
+                        if status.opensSettings {
+                            Button("Open Settings", action: openAppSettings)
+                            Button("Not Now", role: .cancel) {}
+                        } else {
+                            Button("OK", role: .cancel) {}
+                        }
+                    } message: { status in
+                        Text(status.message(language: store.captionLanguage) ?? "")
                     }
 
                     // Appearance
@@ -687,8 +715,11 @@ private struct DeviceDetailRow: View {
 
 struct APRSNotificationsView: View {
     @Environment(\.theme) var t
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @Bindable var store: RadioStore
     @State private var authDenied = false
+    @State private var showDeniedAlert = false
 
     // Display order for the per-kind toggles.
     private static let kinds: [APRSPacketKind] =
@@ -706,19 +737,14 @@ struct APRSNotificationsView: View {
                             ? "Notifications are turned off for kv4p HT. Enable them in iOS Settings › Notifications."
                             : "Packets arrive while the app runs in the background (connected via Bluetooth)."
                     ) {
-                        ListRow(title: "Notify on APRS packets", isLast: true, dense: true,
-                                accessory: KVToggle(isOn: Binding(
-                                    get: { store.aprsNotify.enabled },
-                                    set: { on in
-                                        if on {
-                                            store.notifications.requestAuthorization { granted in
-                                                authDenied = !granted
-                                                store.aprsNotify.enabled = granted
-                                            }
-                                        } else {
-                                            store.aprsNotify.enabled = false
-                                        }
-                                    })) as (any View))
+                        ListRow(title: "Notify on APRS packets", isLast: !authDenied, dense: true,
+                                accessory: KVToggle(isOn: enabledBinding) as (any View))
+                        if authDenied {
+                            Button(action: openNotificationSettings) {
+                                ListRow(title: "Open iOS Settings", isLast: true, dense: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
 
                     ListGroupView(header: "Packet types") {
@@ -777,10 +803,52 @@ struct APRSNotificationsView: View {
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            store.notifications.authorizationStatus { status in
-                authDenied = store.aprsNotify.enabled && status == .denied
-            }
+        .onAppear(perform: refreshAuthStatus)
+        // Returning from iOS Settings: pick up a permission change.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshAuthStatus() }
+        }
+        .alert("Notifications are off", isPresented: $showDeniedAlert) {
+            Button("Open Settings", action: openNotificationSettings)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Notifications for kv4p HT were turned off. To get APRS packet alerts, allow notifications in iOS Settings.")
+        }
+    }
+
+    // iOS won't re-prompt once denied, so route to Settings instead of
+    // silently snapping the toggle back off.
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.aprsNotify.enabled },
+            set: { on in
+                guard on else {
+                    store.aprsNotify.enabled = false
+                    return
+                }
+                store.notifications.authorizationStatus { status in
+                    if status == .denied {
+                        authDenied = true
+                        showDeniedAlert = true
+                        return
+                    }
+                    store.notifications.requestAuthorization { granted in
+                        authDenied = !granted
+                        store.aprsNotify.enabled = granted
+                    }
+                }
+            })
+    }
+
+    private func refreshAuthStatus() {
+        store.notifications.authorizationStatus { status in
+            authDenied = status == .denied
+        }
+    }
+
+    private func openNotificationSettings() {
+        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+            openURL(url)
         }
     }
 
