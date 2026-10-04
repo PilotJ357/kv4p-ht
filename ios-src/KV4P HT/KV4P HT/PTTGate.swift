@@ -24,14 +24,18 @@ nonisolated enum PTTGate {
         case requestMic
         // TX frequency outside the amateur band (RX ONLY).
         case outOfBand
+        // First transmission: confirm an amateur license; this press does not key.
+        case needsLicenseAck
         // Mic denied; PTT stays inert until allowed in Settings.
         case micDenied
     }
 
-    // micRequired is false for the Demo Radio, which never captures the mic.
-    static func decide(outOfBand: Bool, mic: MicPermission, micRequired: Bool) -> Decision {
+    // micRequired is false for the Demo Radio, which never captures the mic
+    // or transmits, so it skips the license check too.
+    static func decide(outOfBand: Bool, licenseAcked: Bool, mic: MicPermission, micRequired: Bool) -> Decision {
         if outOfBand { return .outOfBand }
         guard micRequired else { return .key }
+        guard licenseAcked else { return .needsLicenseAck }
         switch mic {
         case .granted:      return .key
         case .undetermined: return .requestMic

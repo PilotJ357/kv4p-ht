@@ -7,6 +7,9 @@ import SwiftUI
 struct PrivacyPolicyView: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
+    // Sheet root shows a custom back to this tab; nil when pushed, so the
+    // system back button is used instead.
+    var backLabel: String? = "More"
 
     private static let effectiveDate = "Effective October 4, 2026"
 
@@ -81,13 +84,15 @@ struct PrivacyPolicyView: View {
         .navigationTitle("Privacy")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("More")
-                            .font(.system(size: 17))
+            if let backLabel {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text(backLabel)
+                                .font(.system(size: 17))
+                        }
                     }
                 }
             }
