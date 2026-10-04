@@ -184,7 +184,12 @@ class RadioStore {
     // ── Captions
     var captionLines: [CaptionLine] = []
     let speechManager = SpeechManager()
-    @ObservationIgnored private var wasSquelched = true
+    private(set) var captionsStatus: CaptionsStatus = .off
+    @ObservationIgnored private var isRequestingSpeechAuth = false
+    @ObservationIgnored private var captionRetryTask: Task<Void, Never>?
+    // No audio reaches the recognizer in background (sample hook removed).
+    @ObservationIgnored private var captionsSuspended = false
+    private static let captionRetryDelay: Duration = .seconds(2)
 
     // ── Settings
     var callsign: String = "" {
@@ -214,7 +219,13 @@ class RadioStore {
             }
         }
     }
-    var liveCaptions: Bool = true
+    var liveCaptions: Bool = true {
+        didSet {
+            guard !isInitializing, liveCaptions != oldValue else { return }
+            refreshCaptionsStatus()
+            requestCaptionsPermissionIfNeeded()
+        }
+    }
     var stickyPTT: Bool = false
     var bandwidth: UInt8 = 0 {  // 0=wide 25kHz, 1=narrow 12.5kHz
         didSet {
@@ -365,7 +376,6 @@ class RadioStore {
 
     private func configureSpeechManager() {
         speechManager.configure(language: captionLanguage)
-        if !speechManager.supportsOnDeviceRecognition { liveCaptions = false }
 
         speechManager.onPartialResult = { [weak self] text in
             guard let self else { return }
@@ -388,6 +398,70 @@ class RadioStore {
         speechManager.onRollingRestart = { [weak self] in
             self?.appendNewCaptionLine()
         }
+
+        // The recognizer gave up (final result, error, model not ready)
+        // while a continuous signal may still hold squelch open; no
+        // squelch transition will come, so retry on our own.
+        speechManager.onSegmentEnded = { [weak self] in
+            self?.scheduleCaptionRetry()
+        }
+
+        refreshCaptionsStatus()
+    }
+
+    // Re-derives captionsStatus from the toggle, permission, and on-device
+    // support; starts or stops recognition to match. Call when any input
+    // may have changed (toggle, permission prompt, returning from Settings).
+    func refreshCaptionsStatus() {
+        let status = CaptionsStatus.resolve(
+            enabled: liveCaptions,
+            authorization: speechManager.authorizationStatus,
+            supportsOnDevice: speechManager.supportsOnDeviceRecognition)
+        if status != captionsStatus { captionsStatus = status }
+        if captionsStatus == .listening {
+            startCaptionsIfReceiving()
+        } else {
+            stopCaptions()
+        }
+    }
+
+    // Asks for speech recognition at point of intent (Captions sheet opened
+    // or toggle turned on), never at launch.
+    func requestCaptionsPermissionIfNeeded() {
+        guard captionsStatus == .needsPermission, !isRequestingSpeechAuth else { return }
+        isRequestingSpeechAuth = true
+        speechManager.requestAuthorization { [weak self] _ in
+            guard let self else { return }
+            self.isRequestingSpeechAuth = false
+            self.refreshCaptionsStatus()
+        }
+    }
+
+    private func startCaptionsIfReceiving() {
+        guard captionsStatus == .listening, !captionsSuspended, !isSquelched,
+              !speechManager.isSegmentActive else { return }
+        captionRetryTask?.cancel()
+        if speechManager.startSegment() {
+            appendNewCaptionLine()
+        } else {
+            scheduleCaptionRetry()
+        }
+    }
+
+    private func scheduleCaptionRetry() {
+        captionRetryTask?.cancel()
+        guard captionsStatus == .listening, !captionsSuspended, !isSquelched else { return }
+        captionRetryTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.captionRetryDelay)
+            guard !Task.isCancelled else { return }
+            self?.startCaptionsIfReceiving()
+        }
+    }
+
+    private func stopCaptions() {
+        captionRetryTask?.cancel()
+        captionRetryTask = nil
+        speechManager.endSegment()
     }
 
     private func appendNewCaptionLine() {
@@ -490,15 +564,13 @@ class RadioStore {
     }
 
     func checkSquelchTransition() {
-        let sq = isSquelched
-        defer { wasSquelched = sq }
-        guard liveCaptions else { return }
-
-        if wasSquelched && !sq {
-            appendNewCaptionLine()
-            speechManager.startSegment()
-        } else if !wasSquelched && sq {
-            speechManager.endSegment()
+        // Level-based so it stays correct after segments started outside a
+        // transition (foreground, permission granted); both calls are no-ops
+        // when already in the right state.
+        if isSquelched {
+            stopCaptions()
+        } else {
+            startCaptionsIfReceiving()
         }
     }
 
@@ -513,8 +585,8 @@ class RadioStore {
     // (speech recognition burns CPU and is unreliable in background).
     func enterBackground() {
         ble.setAudioSampleHook(nil)
-        speechManager.endSegment()
-        wasSquelched = true
+        captionsSuspended = true
+        stopCaptions()
         // Ensure a monitoring Live Activity exists if we're connected — covers
         // the case where the link was already up before the activity could start
         // (start() is idempotent). It then renders on the Lock Screen.
@@ -526,6 +598,10 @@ class RadioStore {
     func enterForeground() {
         setupAudioSampleHook()
         ble.recoverAudioIfNeeded()
+        captionsSuspended = false
+        // Speech permission may have changed in Settings while away; also
+        // resumes captions if a signal is still being received.
+        refreshCaptionsStatus()
     }
 
     var scanList: [Memory] { memories.filter(\.scanEnabled) }
