@@ -33,9 +33,6 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.hardware.usb.UsbManager;
-import android.media.AudioFormat;
-import android.media.AudioRecord;
-import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -45,12 +42,9 @@ import android.os.Vibrator;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
-import android.view.KeyEvent;
-import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
@@ -66,25 +60,17 @@ import androidx.appcompat.widget.PopupMenu;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import androidx.databinding.DataBindingUtil;
-import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.snackbar.BaseTransientBottomBar;
 import com.google.android.material.snackbar.Snackbar;
 import com.vagell.kv4pht.BR;
 import com.vagell.kv4pht.R;
-import com.vagell.kv4pht.aprs.parser.APRSPacket;
-import com.vagell.kv4pht.aprs.parser.APRSTypes;
-import com.vagell.kv4pht.aprs.parser.InformationField;
-import com.vagell.kv4pht.aprs.parser.MessagePacket;
-import com.vagell.kv4pht.aprs.parser.ObjectField;
-import com.vagell.kv4pht.aprs.parser.PositionField;
-import com.vagell.kv4pht.aprs.parser.Utilities;
-import com.vagell.kv4pht.aprs.parser.WeatherField;
-import com.vagell.kv4pht.data.APRSMessage;
+import com.vagell.kv4pht.data.AprsFeedPolicy;
 import com.vagell.kv4pht.data.AppSetting;
 import com.vagell.kv4pht.data.ChannelMemory;
 import com.vagell.kv4pht.databinding.ActivityMainBinding;
@@ -108,16 +94,10 @@ import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
 import static com.vagell.kv4pht.radio.RadioAudioService.INTENT_OPEN_CHAT;
 
 public class MainActivity extends AppCompatActivity {
-    // For transmitting audio to ESP32 / radio
-    private AudioRecord audioRecord;
-    private boolean isRecording = false;
-    private int channelConfig = AudioFormat.CHANNEL_IN_MONO;
-    private int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
-    private int minBufferSize = Math.max(
-        AudioRecord.getMinBufferSize(RadioAudioService.AUDIO_SAMPLE_RATE, channelConfig, audioFormat),
-        RadioAudioService.AUDIO_FRAME_SAMPLES * 2);
-
-    private Thread recordingThread;
+    private static final String DEFAULT_BOOLEAN_FALSE = "false";
+    private static final String EXTRA_MEMORY_ID = "memoryId";
+    private static final String EXTRA_REQUEST_CODE = "requestCode";
+    private static final String LOG_TAG = "MainActivity";
 
     private final Handler pttButtonDebounceHandler = new Handler(Looper.getMainLooper());
 
@@ -141,7 +121,8 @@ public class MainActivity extends AppCompatActivity {
     private String activeFrequencyStr = "0.0000";
     private String callsign = null;
     private boolean stickyPTT = false;
-    private boolean disableAnimations = false;
+    private boolean moduleTxActive = false;
+    private int currentSMeterValue = 0;
 
     // Activity callback values
     public static final int REQUEST_ADD_MEMORY = 0;
@@ -151,7 +132,6 @@ public class MainActivity extends AppCompatActivity {
     public static final int REQUEST_FIND_REPEATERS = 4;
 
     private MainViewModel viewModel;
-    private RecyclerView memoriesRecyclerView;
     private MemoriesAdapter memoriesAdapter;
     private RecyclerView aprsRecyclerView;
     private APRSAdapter aprsAdapter;
@@ -161,13 +141,13 @@ public class MainActivity extends AppCompatActivity {
     private String selectedMemoryGroup = null; // null means unfiltered, no group selected
     private int activeMemoryId = -1; // -1 means we're in simplex mode
 
-    // Tx audio visualizer constants
-    private static int MAX_AUDIO_VIZ_SIZE = 500;
-    private static int MIN_TX_AUDIO_VIZ_SIZE = 200;
-    private static int RECORD_ANIM_FPS = 30;
+    private static final int S_METER_MAX_VALUE = 13;
 
     // The main service that handles USB with the ESP32, incoming and outgoing audio, data, etc.
     private RadioAudioService radioAudioService = null;
+    private boolean aprsMessagesObserved;
+    private boolean aprsAutoFollow = true;
+    private boolean aprsUserScrolling;
     private boolean radioAudioServiceBound = false;
     private final AtomicBoolean bindingInProgress = new AtomicBoolean(false);
 
@@ -190,6 +170,8 @@ public class MainActivity extends AppCompatActivity {
     };
 
     @SuppressLint("ClickableViewAccessibility")
+    // Lifecycle orchestration is clearer when its related UI setup remains together.
+    @SuppressWarnings("java:S3776")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -203,7 +185,7 @@ public class MainActivity extends AppCompatActivity {
         binding.setVariable(BR.viewModel, viewModel);
 
         // Prepare a RecyclerView for the list of channel memories
-        memoriesRecyclerView = findViewById(R.id.memoriesList);
+        RecyclerView memoriesRecyclerView = findViewById(R.id.memoriesList);
         memoriesRecyclerView.setLayoutManager(new LinearLayoutManager(this));
         memoriesAdapter = new MemoriesAdapter(new MemoriesAdapter.MemoryListener() {
             @Override
@@ -236,8 +218,8 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onMemoryEdit(ChannelMemory memory) {
                 Intent intent = new Intent("com.vagell.kv4pht.EDIT_MEMORY_ACTION");
-                intent.putExtra("requestCode", REQUEST_EDIT_MEMORY);
-                intent.putExtra("memoryId", memory.memoryId);
+                intent.putExtra(EXTRA_REQUEST_CODE, REQUEST_EDIT_MEMORY);
+                intent.putExtra(EXTRA_MEMORY_ID, memory.memoryId);
                 intent.putExtra("isVhfRadio", (radioAudioService != null && radioAudioService.getRadioType() == RadioAudioService.RadioModuleType.VHF));
                 startActivityForResult(intent, REQUEST_EDIT_MEMORY);
             }
@@ -245,48 +227,57 @@ public class MainActivity extends AppCompatActivity {
         memoriesRecyclerView.setAdapter(memoriesAdapter);
 
         // Observe the channel memories LiveData in MainViewModel (so the RecyclerView can populate with the memories)
-        viewModel.getChannelMemories().observe(this, new Observer<List<ChannelMemory>>() {
-            @Override
-            public void onChanged(List<ChannelMemory> channelMemories) {
-                memoriesAdapter.setMemoriesList(channelMemories);
-                memoriesAdapter.notifyDataSetChanged();
-                trySyncInitialRadioUi();
-            }
+        viewModel.getChannelMemories().observe(this, channelMemories -> {
+            memoriesAdapter.setMemoriesList(channelMemories);
+            memoriesAdapter.notifyDataSetChanged();
+            trySyncInitialRadioUi();
         });
 
         // Prepare a RecyclerView for the list APRS messages we've received in the past
         aprsRecyclerView = findViewById(R.id.aprsRecyclerView);
-        aprsRecyclerView.setLayoutManager(new LinearLayoutManager(this));
+        LinearLayoutManager aprsLayoutManager = new LinearLayoutManager(this);
+        // Anchor the first layout at the latest entry, even if the feed loads while chat is hidden.
+        aprsLayoutManager.setStackFromEnd(true);
+        aprsRecyclerView.setLayoutManager(aprsLayoutManager);
         aprsAdapter = new APRSAdapter();
         aprsRecyclerView.setAdapter(aprsAdapter);
-
-        // Observe the APRS messages LiveData in MainViewModel (so the RecyclerView can populate with the APRS messages)
-        viewModel.getAPRSMessages().observe(this, new Observer<List<APRSMessage>>() {
+        aprsRecyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
-            public void onChanged(List<APRSMessage> aprsMessages) {
-                aprsAdapter.setAPRSMessageList(aprsMessages);
-                aprsAdapter.notifyDataSetChanged();
+            public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
+                // Scrolling toward older entries always leaves follow mode, including a fling.
+                if (dy < 0 && aprsUserScrolling) aprsAutoFollow = false;
+            }
 
-                // Scroll to the bottom when a new message is added
-                if (aprsMessages != null && !aprsMessages.isEmpty()) {
-                    aprsRecyclerView.scrollToPosition(aprsMessages.size() - 1);
+            @Override
+            public void onScrollStateChanged(@NonNull RecyclerView recyclerView, int newState) {
+                if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
+                    aprsUserScrolling = true;
+                    aprsAutoFollow = false;
+                } else if (newState == RecyclerView.SCROLL_STATE_IDLE && aprsUserScrolling) {
+                    aprsUserScrolling = false;
+                    aprsAutoFollow = isAprsFeedAtBottom();
                 }
+            }
+        });
+        aprsRecyclerView.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            if (!aprsAutoFollow || aprsUserScrolling || !aprsRecyclerView.isShown()
+                    || aprsRecyclerView.getHeight() == 0 || aprsAdapter.getItemCount() == 0) return;
+            // Preserve follow mode across keyboard resize and asynchronous feed/layout updates.
+            if (!isAprsFeedAtBottom()) {
+                aprsRecyclerView.scrollToPosition(aprsAdapter.getItemCount() - 1);
             }
         });
 
         // Set up behavior on the bottom nav
         BottomNavigationView bottomNav = findViewById(R.id.bottomNavigationView);
-        bottomNav.setOnNavigationItemSelectedListener(new BottomNavigationView.OnNavigationItemSelectedListener() {
-            @Override
-            public boolean onNavigationItemSelected(@NonNull MenuItem menuItem) {
-                int itemId = menuItem.getItemId();
-                if (itemId == R.id.voice_mode) {
-                    showScreen(ScreenType.SCREEN_VOICE);
-                } else if (itemId == R.id.text_chat_mode) {
-                    showScreen(ScreenType.SCREEN_CHAT);
-                }
-                return true;
+        bottomNav.setOnNavigationItemSelectedListener(menuItem -> {
+            int itemId = menuItem.getItemId();
+            if (itemId == R.id.voice_mode) {
+                showScreen(ScreenType.SCREEN_VOICE);
+            } else if (itemId == R.id.text_chat_mode) {
+                showScreen(ScreenType.SCREEN_CHAT);
             }
+            return true;
         });
         attachListeners();
         IntentFilter filter = new IntentFilter();
@@ -302,6 +293,7 @@ public class MainActivity extends AppCompatActivity {
 
     /** Defines callbacks for service binding, passed to bindService(). */
     private ServiceConnection connection = new ServiceConnection() {
+
         @Override
         public void onServiceConnected(ComponentName className,
                                        IBinder service) {
@@ -366,11 +358,8 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 @Override
-                public void audioTrackCreated() { }
-
-                @Override
-                public void packetReceived(APRSPacket aprsPacket) {
-                    handleChatPacket(aprsPacket);
+                public void audioTrackCreated() {
+                    // Audio playback is managed by RadioAudioService; the activity has no UI work to do.
                 }
 
                 @Override
@@ -396,10 +385,16 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void initialDeviceStateReceived() {
                     runOnUiThread(() -> {
+                        updateVoiceModeCaption();
                         initialRadioUiSynced = false;
                         pendingInitialRadioUiSync = true;
                         trySyncInitialRadioUi();
                     });
+                }
+
+                @Override
+                public void radioConfigChanged() {
+                    runOnUiThread(() -> syncRadioUiFromDeviceState());
                 }
 
                 @Override
@@ -455,29 +450,30 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 @Override
-                public void moduleTxStateChanged(boolean txActive) {
-                    runOnUiThread(() -> showModuleTxState(txActive));
+                public void moduleStateChanged(boolean txActive, boolean squelched) {
+                    runOnUiThread(() -> showModuleState(txActive, squelched));
+                }
+
+                @Override
+                public void freeDvModeChanged(boolean enabled) {
+                    runOnUiThread(() -> updateVoiceModeCaption());
                 }
 
                 /**
-                 * Shows firmware-reported TX activity even when Android did not initiate PTT,
-                 * for example while firmware is transmitting an APRS packet.
+                 * Shows firmware-reported TX and squelch state even when Android did not
+                 * initiate PTT, for example while firmware is transmitting an APRS packet.
                  */
-                private void showModuleTxState(boolean txActive) {
-                    int bandColor = ContextCompat.getColor(MainActivity.this, txActive ? R.color.accent : R.color.band);
-                    int sMeterColor = ContextCompat.getColor(MainActivity.this, txActive ? R.color.accent : R.color.primary);
-
-                    TextView activeBand = findViewById(R.id.activeBand);
-                    activeBand.setTextColor(bandColor);
-
-                    int[] sMeterIds = {
-                        R.id.sMeter1, R.id.sMeter2, R.id.sMeter3,
-                        R.id.sMeter4, R.id.sMeter5, R.id.sMeter6,
-                        R.id.sMeter7, R.id.sMeter8, R.id.sMeter9
-                    };
-                    for (int sMeterId : sMeterIds) {
-                        findViewById(sMeterId).setBackgroundColor(sMeterColor);
+                private void showModuleState(boolean txActive, boolean squelched) {
+                    moduleTxActive = txActive;
+                    TextView moduleStateLabel = findViewById(R.id.moduleStateLabel);
+                    if (txActive) {
+                        moduleStateLabel.setText(R.string.module_state_tx);
+                    } else if (squelched) {
+                        moduleStateLabel.setText(R.string.module_state_squelched);
+                    } else {
+                        moduleStateLabel.setText("");
                     }
+                    updateSMeter(currentSMeterValue);
                 }
 
                 @Override
@@ -496,27 +492,12 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void sMeterUpdate(int value) {
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            updateSMeter(value);
-                        }
-                    });
+                    runOnUiThread(() -> updateSMeter(value));
                 }
 
                 @Override
                 public void sentAprsBeacon(double latitude, double longitude, String frequencyStr, boolean wasSwitch) {
-                    // Show a mock-up of the beacon we sent, in our own chat log
-                    APRSMessage myBeacon = new APRSMessage();
-                    myBeacon.type = APRSMessage.POSITION_TYPE;
-                    myBeacon.fromCallsign = callsign;
-                    myBeacon.positionLat = latitude;
-                    myBeacon.positionLong = longitude;
-                    myBeacon.timestamp = java.time.Instant.now().getEpochSecond();
-                    threadPoolExecutor.execute(() -> {
-                        viewModel.getAppDb().aprsMessageDao().insertAll(myBeacon);
-                        viewModel.loadDataAsync(() -> runOnUiThread(() -> aprsAdapter.notifyDataSetChanged()));
-                    });
+                    // The service-owned APRS controller records the outgoing beacon.
                 }
 
                 @Override
@@ -539,8 +520,32 @@ public class MainActivity extends AppCompatActivity {
                     doShowNotification(notificationChannelId, notificationTypeId, title, message, tapIntentName);
                 }
             };
-            initAudioRecorder();
             radioAudioService.setCallbacks(callbacks);
+            if (!aprsMessagesObserved) {
+                radioAudioService.getAprsFeed().observe(MainActivity.this, aprsFeed -> {
+                    boolean autoScroll = aprsAutoFollow && !aprsUserScrolling;
+                    LinearLayoutManager layoutManager =
+                        (LinearLayoutManager) aprsRecyclerView.getLayoutManager();
+                    int anchorPosition = layoutManager.findFirstVisibleItemPosition();
+                    String anchorKey = aprsAdapter.getFeedKey(anchorPosition);
+                    View anchorView = layoutManager.findViewByPosition(anchorPosition);
+                    int anchorOffset = anchorView == null ? 0
+                        : layoutManager.getDecoratedTop(anchorView) - aprsRecyclerView.getPaddingTop();
+                    aprsAdapter.setAprsFeed(aprsFeed);
+                    aprsAdapter.notifyDataSetChanged();
+                    if (autoScroll && aprsFeed != null && !aprsFeed.isEmpty()) {
+                        aprsRecyclerView.scrollToPosition(aprsFeed.size() - 1);
+                    } else {
+                        // A full feed refresh can reorder collapsed beacon rows. Preserve the
+                        // actual row being read, rather than its old position or the list end.
+                        int newAnchorPosition = aprsAdapter.findFeedPosition(anchorKey);
+                        if (newAnchorPosition != RecyclerView.NO_POSITION) {
+                            layoutManager.scrollToPositionWithOffset(newAnchorPosition, anchorOffset);
+                        }
+                    }
+                });
+                aprsMessagesObserved = true;
+            }
             applySettings(); // Some settings require radioAudioService to exist to apply.
             radioAudioService.setChannelMemories(viewModel.getChannelMemories());
             runOnUiThread(() -> radioAudioService.start());
@@ -550,10 +555,37 @@ public class MainActivity extends AppCompatActivity {
         public void onServiceDisconnected(ComponentName arg0) {
             radioAudioService = null;
             radioAudioServiceBound = false;
-            Log.d("DEBUG", "RadioAudioService disconnected from MainActivity.");
-            // TODO if this is unexpected we should probably try to restart the service.
+            aprsMessagesObserved = false;
+            Log.d(LOG_TAG, "RadioAudioService disconnected from MainActivity.");
+            // A future service-recovery policy can be added here if disconnects become recoverable.
         }
     };
+
+    private boolean isAprsFeedAtBottom() {
+        int itemCount = aprsAdapter.getItemCount();
+        if (itemCount == 0) return true;
+        RecyclerView.LayoutManager layoutManager = aprsRecyclerView.getLayoutManager();
+        if (!(layoutManager instanceof LinearLayoutManager)) return false;
+        int lastVisible = ((LinearLayoutManager) layoutManager).findLastVisibleItemPosition();
+        View lastRow = layoutManager.findViewByPosition(itemCount - 1);
+        return lastRow != null && isAprsBottomVisible(itemCount, lastVisible, lastRow.getBottom(),
+            aprsRecyclerView.getHeight() - aprsRecyclerView.getPaddingBottom());
+    }
+
+    static boolean isAprsBottomVisible(int itemCount, int lastVisiblePosition,
+                                       int lastRowBottom, int viewportBottom) {
+        return itemCount > 0 && lastVisiblePosition == itemCount - 1
+            && lastRowBottom <= viewportBottom;
+    }
+
+    private void updateVoiceModeCaption() {
+        BottomNavigationView bottomNav = findViewById(R.id.bottomNavigationView);
+        boolean digital = radioAudioService != null
+                && radioAudioService.supportsFreeDv2400b()
+                && radioAudioService.isFreeDv2400bEnabled();
+        bottomNav.getMenu().findItem(R.id.voice_mode).setTitle(
+                digital ? R.string.freedv_2400b_display : R.string.voice_display);
+    }
 
     /**
      * Returns the set of runtime permissions required before starting
@@ -578,9 +610,15 @@ public class MainActivity extends AppCompatActivity {
      * @return immutable list of required runtime permissions
      */
     private List<String> foregroundServicePermissions() {
-        return List.of(Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.POST_NOTIFICATIONS);
+        List<String> permissions = new ArrayList<>();
+        permissions.add(Manifest.permission.RECORD_AUDIO);
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN);
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        return permissions;
     }
 
     private void startAndBindRadioAudioService() {
@@ -618,26 +656,24 @@ public class MainActivity extends AppCompatActivity {
         unregisterReceiver(serviceShutdownReceiver);
         try {
             threadPoolExecutor.shutdownNow();
-        } catch (Exception ignored) { }
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "Unable to shut down the background executor", e);
+        }
 
         try {
             if (radioAudioServiceBound) {
                 unbindService(connection);
                 radioAudioServiceBound = false;
             }
-        } catch (Exception e) { }
+        } catch (Exception e) {
+            Log.w(LOG_TAG, "Unable to unbind the radio service", e);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // If we lost reference to the radioAudioService, startAndBindRadioAudioService();
         startAndBindRadioAudioService();
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
     }
 
     @Override
@@ -650,199 +686,15 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void handleChatPacket(APRSPacket rawAprsPacket) {
-        // We use duck-typing for APRS messages since the spec is pretty loose with all the ways
-        // you can define different fields and values. Once we know the type, we set aprsMessage.type.
-
-        final APRSPacket aprsPacketFinal;
-        APRSMessage aprsMessage = new APRSMessage();
-        InformationField infoField = rawAprsPacket.getPayload();
-
-        // Handle third-party relayed packets
-        String relayCallsign = null;
-        com.vagell.kv4pht.aprs.parser.ThirdPartyField thirdPartyField = (com.vagell.kv4pht.aprs.parser.ThirdPartyField) infoField.getAprsData(APRSTypes.T_THIRDPARTY);
-        if (thirdPartyField != null) {
-            relayCallsign = rawAprsPacket.getSourceCall();
-            com.vagell.kv4pht.aprs.parser.APRSPacket innerPacket = thirdPartyField.getInnerPacket();
-            if (innerPacket == null || innerPacket.hasFault()) {
-                aprsMessage.type = APRSMessage.UNKNOWN_TYPE;
-                aprsMessage.fromCallsign = rawAprsPacket.getSourceCall();
-                aprsMessage.timestamp = java.time.Instant.now().getEpochSecond();
-                aprsMessage.relayCallsign = relayCallsign;
-                try {
-                    aprsMessage.comment = "Raw: " + new String(infoField.getRawBytes(), "UTF-8");
-                } catch (Exception e) { }
-                threadPoolExecutor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        viewModel.getAppDb().aprsMessageDao().insertAll(aprsMessage);
-                        viewModel.loadDataAsync(() -> runOnUiThread(() -> aprsAdapter.notifyDataSetChanged()));
-                    }
-                });
-                return;
-            }
-            aprsPacketFinal = innerPacket;
-            infoField = innerPacket.getPayload();
-        } else {
-            aprsPacketFinal = rawAprsPacket;
-        }
-
-        WeatherField weatherField = (WeatherField) infoField.getAprsData(APRSTypes.T_WX);
-        PositionField positionField = (PositionField) infoField.getAprsData(APRSTypes.T_POSITION);
-        ObjectField objectField = (ObjectField) infoField.getAprsData(APRSTypes.T_OBJECT);
-        aprsMessage.timestamp = java.time.Instant.now().getEpochSecond();
-
-        // Get the fromCallsign (all APRS messages must have this)
-        aprsMessage.fromCallsign = aprsPacketFinal.getSourceCall();
-
-        // Get the position, if included.
-        if (null != positionField) {
-            aprsMessage.type = APRSMessage.POSITION_TYPE; // Anything with a position is POSITION_TYPE unless we determine more specific type later.
-            aprsMessage.positionLat = positionField.getPosition().getLatitude();
-            aprsMessage.positionLong = positionField.getPosition().getLongitude();
-        }
-
-        // Try to find a comment (could be at multiple levels in the packet).
-        String comment = aprsPacketFinal.getComment();
-        if (null != infoField && (null == comment || comment.trim().length() == 0)) {
-            comment = infoField.getComment();
-        }
-        if (null != positionField && (null == comment || comment.trim().length() == 0)) {
-            comment = positionField.getComment();
-        }
-        if (null != objectField && (null == comment || comment.trim().length() == 0)) {
-            comment = objectField.getComment();
-        }
-        if (null != weatherField && (null == comment || comment.trim().length() == 0)) {
-            comment = weatherField.getComment();
-        }
-        if (null != comment && comment.trim().length() > 0) {
-            aprsMessage.comment = comment;
-        }
-
-        if (null != weatherField) { // APRS "weather" (i.e. any message with weather data attached)
-            aprsMessage.type = APRSMessage.WEATHER_TYPE;
-            aprsMessage.temperature = (null == weatherField.getTemp()) ? 0 : weatherField.getTemp();
-            aprsMessage.humidity = (null == weatherField.getHumidity()) ? 0 : weatherField.getHumidity();
-            aprsMessage.pressure = (null == weatherField.getPressure()) ? 0 : weatherField.getPressure();
-            aprsMessage.rain = (null == weatherField.getRainLast24Hours()) ? 0 : weatherField.getRainLast24Hours(); // TODO don't ignore other rain measurements
-            aprsMessage.snow = (null == weatherField.getSnowfallLast24Hours()) ? 0 : weatherField.getSnowfallLast24Hours();
-            aprsMessage.windForce = (null == weatherField.getWindSpeed()) ? 0 : weatherField.getWindSpeed();
-            aprsMessage.windDir = (null == weatherField.getWindDirection()) ? "" : Utilities.degressToCardinal(weatherField.getWindDirection());
-
-            // Log.d("DEBUG", "Weather packet received");
-        } else if (infoField.getDataTypeIdentifier() == ':') { // APRS "message" type. What we expect for our text chat.
-            aprsMessage.type = APRSMessage.MESSAGE_TYPE;
-            MessagePacket messagePacket = new MessagePacket(infoField.getRawBytes(), aprsPacketFinal.getDestinationCall());
-            aprsMessage.toCallsign = messagePacket.getTargetCallsign();
-
-            String msgNumStr = messagePacket.getMessageNumber();
-            if (msgNumStr != null && !msgNumStr.trim().isEmpty()) {
-                try {
-                    aprsMessage.msgNum = Integer.parseInt(msgNumStr.trim());
-                } catch (NumberFormatException e) {
-                    aprsMessage.msgNum = -1;
-                }
-            } else {
-                aprsMessage.msgNum = -1;
-            }
-
-            if (messagePacket.isAck()) {
-                aprsMessage.wasAcknowledged = true;
-                if (aprsMessage.msgNum == -1) {
-                    Log.d("DEBUG", "Warning: Bad message number in APRS ack, ignoring: '" + messagePacket.getMessageNumber() + "'");
-                    return;
-                }
-                // Log.d("DEBUG", "Message ack received");
-            } else {
-                aprsMessage.msgBody = messagePacket.getMessageBody();
-                // Log.d("DEBUG", "Message packet received");
-
-                // Handle messages addressed to the current callsign
-                if (callsign != null && aprsMessage.toCallsign != null && aprsMessage.toCallsign.trim().equalsIgnoreCase(callsign.trim())) {
-                    doShowNotification(
-                            RadioAudioService.MESSAGE_NOTIFICATION_CHANNEL_ID,
-                            RadioAudioService.MESSAGE_NOTIFICATION_TO_YOU_ID,
-                            aprsPacketFinal.getSourceCall() + " messaged you",
-                            aprsMessage.msgBody,
-                            RadioAudioService.INTENT_OPEN_CHAT);
-
-                    if (aprsMessage.msgNum != -1) { // APRS spec says only ack if msg num provided
-                        // Send acknowledgment after a delay
-                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                            if (radioAudioService != null) {
-                                radioAudioService.sendAckMessage(aprsPacketFinal.getSourceCall().toUpperCase(), String.valueOf(aprsMessage.msgNum));
-                            }
-                        }, 1000);
-                    }
-                }
-
-            }
-        } else if (infoField.getDataTypeIdentifier() == ';') { // APRS "object"
-            aprsMessage.type = APRSMessage.OBJECT_TYPE;
-            if (null != objectField) {
-                aprsMessage.objName = objectField.getObjectName();
-                // Log.d("DEBUG", "Object packet received");
-            }
-        }
-
-        // If there is a fault in the packet, or the message type is unknown, we at least display the raw contents as a comment.
-        if (aprsPacketFinal.hasFault() || aprsMessage.type == APRSMessage.UNKNOWN_TYPE && (null == comment || comment.trim().length() == 0)) {
-            if (null != infoField) {
-                try {
-                    comment = "Raw: " + new String(infoField.getRawBytes(), "UTF-8");
-                    aprsMessage.comment = comment;
-                } catch (Exception e) { }
-            }
-        }
-
-        aprsMessage.relayCallsign = relayCallsign;
-
-        threadPoolExecutor.execute(new Runnable() {
-            @Override
-            public void run() {
-                APRSMessage oldAPRSMessage = null;
-                if (aprsMessage.wasAcknowledged) {
-                    // When this is an ack, we don't insert anything in the DB, we try to find that old message to ack it.
-                    oldAPRSMessage = viewModel.getAppDb().aprsMessageDao().getMsgToAck(aprsMessage.toCallsign, aprsMessage.msgNum);
-                    if (null == oldAPRSMessage) {
-                        Log.d("DEBUG", "Can't ack unknown APRS message from: " + aprsMessage.toCallsign + " with msg number: " + aprsMessage.msgNum);
-                        return;
-                    } else {
-                        // Ack an old message
-                        oldAPRSMessage.wasAcknowledged = true;
-                        viewModel.getAppDb().aprsMessageDao().update(oldAPRSMessage);
-                    }
-                } else {
-                    // Not an ack, add a message
-
-                    // Deduplicate incoming APRS messages with sequence numbers against recent history
-                    if (aprsMessage.type == APRSMessage.MESSAGE_TYPE && aprsMessage.msgNum != -1) {
-                        if (viewModel.getAppDb().aprsMessageDao().isRecentDuplicate(
-                                aprsMessage.fromCallsign,
-                                aprsMessage.msgBody,
-                                aprsMessage.msgNum)) {
-                            Log.d("DEBUG", "Discarding duplicate APRS message from " +
-                                    aprsMessage.fromCallsign + " with msgNum " + aprsMessage.msgNum);
-                            return;
-                        }
-                    }
-
-                    viewModel.getAppDb().aprsMessageDao().insertAll(aprsMessage);
-                }
-
-                viewModel.loadDataAsync(() -> runOnUiThread(() -> aprsAdapter.notifyDataSetChanged()));
-            }
-        });
-    }
-
     private enum ScreenType {
         SCREEN_VOICE,
         SCREEN_CHAT
-    };
+    }
 
+    // Keeping the two screen transitions adjacent makes their shared visibility state explicit.
+    @SuppressWarnings("java:S3776")
     private void showScreen(ScreenType screenType) {
-        // TODO The right way to implement the bottom nav toggling the UI would be with Fragments.
+        // This Activity intentionally owns the bottom-navigation screen switching.
         // Controls for voice mode
         findViewById(R.id.voiceModeLineHolder).setVisibility(screenType == ScreenType.SCREEN_CHAT ? GONE : VISIBLE);
         findViewById(R.id.pttButton).setVisibility(screenType == ScreenType.SCREEN_CHAT ? GONE : VISIBLE);
@@ -863,7 +715,7 @@ public class MainActivity extends AppCompatActivity {
 
             // If their callsign is not set, display a snackbar asking them to set it before they
             // can transmit.
-            if (callsign == null || callsign.length() == 0) {
+            if (callsign == null || callsign.isEmpty()) {
                 showCallsignSnackbar(getString(R.string.set_your_callsign_to_send_text_chat));
                 ImageButton sendButton = findViewById(R.id.sendButton);
                 sendButton.setEnabled(false);
@@ -895,13 +747,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showCallsignSnackbar(CharSequence snackbarMsg) {
-        callsignSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, Snackbar.LENGTH_INDEFINITE)
-                .setAction(R.string.set_now, new View.OnClickListener() {
-                    @Override
-                    public void onClick(View view) {
-                        callsignSnackbar.dismiss();
-                        startSettingsActivity();
-                    }
+        callsignSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, BaseTransientBottomBar.LENGTH_INDEFINITE)
+                .setAction(R.string.set_now, view -> {
+                    callsignSnackbar.dismiss();
+                    startSettingsActivity();
                 })
                 .setBackgroundTint(getResources().getColor(R.color.primary))
                 .setTextColor(getResources().getColor(R.color.medium_gray))
@@ -917,22 +766,22 @@ public class MainActivity extends AppCompatActivity {
         callsignSnackbar.show();
     }
 
-    public void sendButtonOverlayClicked(View view) {
-        if (callsign == null || callsign.length() == 0) {
+    public void sendButtonOverlayClicked(View view) { // NOSONAR S1172: XML onClick signature requires View.
+        if (callsign == null || callsign.isEmpty()) {
             showCallsignSnackbar(getString(R.string.set_your_callsign_to_send_text_chat));
             ImageButton sendButton = findViewById(R.id.sendButton);
             sendButton.setEnabled(false);
         }
     }
 
-    public void sendTextClicked(View view) {
+    public void sendTextClicked(View view) { // NOSONAR S1172: XML onClick signature requires View.
         if (null != radioAudioService && !radioAudioService.isTxAllowed()) {
             showSimpleSnackbar(getString(R.string.can_t_tx_outside_ham_band));
             return;
         }
 
         String targetCallsign = ((EditText) findViewById(R.id.textChatTo)).getText().toString().trim();
-        if (targetCallsign.length() == 0) {
+        if (targetCallsign.isEmpty()) {
             targetCallsign = "BLN1CQ";
         } else {
             targetCallsign = targetCallsign.toUpperCase();
@@ -940,49 +789,17 @@ public class MainActivity extends AppCompatActivity {
         ((EditText) findViewById(R.id.textChatTo)).setText(targetCallsign);
 
         String outText = ((EditText) findViewById(R.id.textChatInput)).getText().toString();
-        if (outText.length() == 0) {
+        if (outText.isEmpty()) {
             return; // Nothing to send.
         }
 
-        int msgNum = -1;
         if (radioAudioService != null) {
-            msgNum = radioAudioService.sendChatMessage(targetCallsign, outText);
+            radioAudioService.sendChatMessage(targetCallsign, outText);
         }
 
         ((EditText) findViewById(R.id.textChatInput)).setText("");
         hideKeyboard();
 
-        final APRSMessage aprsMessage = new APRSMessage();
-        aprsMessage.type = APRSMessage.MESSAGE_TYPE;
-        aprsMessage.fromCallsign = callsign.toUpperCase().trim();
-        aprsMessage.toCallsign = targetCallsign.toUpperCase().trim();
-        aprsMessage.msgBody = outText.trim();
-        aprsMessage.timestamp = java.time.Instant.now().getEpochSecond();
-        aprsMessage.msgNum = msgNum;
-
-        threadPoolExecutor.execute(new Runnable() {
-            @Override
-            public void run() {
-                viewModel.getAppDb().aprsMessageDao().insertAll(aprsMessage);
-                viewModel.loadDataAsync(() -> runOnUiThread(() -> aprsAdapter.notifyDataSetChanged()));
-            }
-        });
-
-    }
-
-    private void updateRecordingVisualization(int waitMs, float txVolume) {
-        if (disableAnimations) { return; }
-        final Handler handler = new Handler(Looper.getMainLooper());
-        handler.postDelayed(() -> runOnUiThread(() -> {
-            ImageView txAudioView = findViewById(R.id.txAudioCircle);
-            ViewGroup.MarginLayoutParams layoutParams = (ViewGroup.MarginLayoutParams) txAudioView.getLayoutParams();
-            RadioMode mode = radioAudioService != null ? radioAudioService.getMode() : RadioMode.UNKNOWN;
-            layoutParams.width = Math.abs(txVolume) < 0.001 ||
-                    mode == RadioMode.RX ? 0 : (int) (MAX_AUDIO_VIZ_SIZE * txVolume) + MIN_TX_AUDIO_VIZ_SIZE;
-            layoutParams.height = Math.abs(txVolume) < 0.001 ||
-                    mode == RadioMode.RX ? 0 : (int) (MAX_AUDIO_VIZ_SIZE * txVolume) + MIN_TX_AUDIO_VIZ_SIZE;
-            txAudioView.setLayoutParams(layoutParams);
-        }), waitMs); // waitMs gives us the fps we desire, see RECORD_ANIM_FPS constant.
     }
 
     private void applySettings() {
@@ -1046,134 +863,95 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void applyAccessibilitySettings(Map<String, String> settings) {
-        disableAnimations = Boolean.parseBoolean(settings.getOrDefault(AppSetting.SETTING_DISABLE_ANIMATIONS, "false"));
+        boolean disableAnimations = Boolean.parseBoolean(settings.getOrDefault(
+            AppSetting.SETTING_DISABLE_ANIMATIONS, DEFAULT_BOOLEAN_FALSE));
         if (disableAnimations) {
             ImageView rxAudioView = findViewById(R.id.rxAudioCircle);
             ViewGroup.MarginLayoutParams layoutParams = (ViewGroup.MarginLayoutParams) rxAudioView.getLayoutParams();
             layoutParams.width = 0;
             layoutParams.height = 0;
             rxAudioView.setLayoutParams(layoutParams);
-            updateRecordingVisualization(100, 0.0f);
         }
 
-        stickyPTT = Boolean.parseBoolean(settings.getOrDefault(AppSetting.SETTING_STICKY_PTT, "false"));
+        stickyPTT = Boolean.parseBoolean(settings.getOrDefault(
+            AppSetting.SETTING_STICKY_PTT, DEFAULT_BOOLEAN_FALSE));
     }
 
     private void applyAprsSettings(Map<String, String> settings) {
-        String accuracy = settings.get(AppSetting.SETTING_APRS_POSITION_ACCURACY);
-        String beacon = settings.get(AppSetting.SETTING_APRS_BEACON_POSITION);
-        String beaconFreq = settings.get(AppSetting.SETTING_APRS_BEACON_FREQUENCY);
-        String aprsIcon = settings.get(AppSetting.SETTING_APRS_ICON);
-
-        if (accuracy != null && radioAudioService != null) {
-            threadPoolExecutor.execute(() -> radioAudioService.setAprsPositionAccuracy(
-                accuracy.equals(getString(R.string.exact)) ?
-                    RadioAudioService.APRS_POSITION_EXACT :
-                    RadioAudioService.APRS_POSITION_APPROX));
+        RadioAudioService service = radioAudioService;
+        if (service == null) {
+            return;
         }
 
-        if (beaconFreq != null && radioAudioService != null) {
-            threadPoolExecutor.execute(() -> radioAudioService.setAprsBeaconFrequency(beaconFreq));
+        applyAprsPositionAccuracy(service, settings.get(AppSetting.SETTING_APRS_POSITION_ACCURACY));
+        applyAprsBeaconFrequency(service, settings.get(AppSetting.SETTING_APRS_BEACON_FREQUENCY));
+        applyAprsBeaconPosition(service, settings.get(AppSetting.SETTING_APRS_BEACON_POSITION));
+        applyAprsIcon(service, settings.get(AppSetting.SETTING_APRS_ICON));
+        applyDigipeatSetting(service, settings.get(AppSetting.SETTING_DIGIPEAT_PACKETS));
+        service.setAprsIsDisplayEnabled(Boolean.parseBoolean(
+            settings.getOrDefault(AppSetting.SETTING_APRS_IS_DISPLAY, DEFAULT_BOOLEAN_FALSE)));
+        service.setAprsIgateEnabled(Boolean.parseBoolean(
+            settings.getOrDefault(AppSetting.SETTING_APRS_IGATE, DEFAULT_BOOLEAN_FALSE)));
+        service.setAprsHistoryWindow(AprsFeedPolicy.HISTORY_ALL);
+        service.setAprsDestinationFilter(settings.getOrDefault(
+            AppSetting.SETTING_APRS_DESTINATION_FILTER, AprsFeedPolicy.DESTINATION_ALL));
+    }
+
+    private void applyAprsPositionAccuracy(RadioAudioService service, String accuracy) {
+        if (accuracy == null) {
+            return;
+        }
+        int positionAccuracy = accuracy.equals(getString(R.string.exact))
+            ? RadioAudioService.APRS_POSITION_EXACT
+            : RadioAudioService.APRS_POSITION_APPROX;
+        threadPoolExecutor.execute(() -> service.setAprsPositionAccuracy(positionAccuracy));
+    }
+
+    private void applyAprsBeaconFrequency(RadioAudioService service, String beaconFrequency) {
+        if (beaconFrequency != null) {
+            threadPoolExecutor.execute(() -> service.setAprsBeaconFrequency(beaconFrequency));
+        }
+    }
+
+    private void applyAprsBeaconPosition(RadioAudioService service, String beacon) {
+        if (beacon == null) {
+            return;
         }
 
-        if (radioAudioService != null && beacon != null) {
-            boolean enabled = Boolean.parseBoolean(beacon);
-            Runnable action = () -> radioAudioService.setAprsBeaconPosition(enabled);
-            if (enabled) {
-                ensurePermissions(List.of(Manifest.permission.ACCESS_FINE_LOCATION), allGranted -> {
-                    if (Boolean.TRUE.equals(allGranted)) {
-                        threadPoolExecutor.execute(action);
-                    }});
-            } else {
+        boolean enabled = Boolean.parseBoolean(beacon);
+        Runnable action = () -> service.setAprsBeaconPosition(enabled);
+        if (!enabled) {
+            threadPoolExecutor.execute(action);
+            return;
+        }
+
+        ensurePermissions(List.of(Manifest.permission.ACCESS_FINE_LOCATION), allGranted -> {
+            if (Boolean.TRUE.equals(allGranted)) {
                 threadPoolExecutor.execute(action);
             }
-        }
+        });
+    }
 
-        if (radioAudioService != null && aprsIcon != null) {
-            radioAudioService.setAprsPositionIcon(SettingsActivity.getAPRSIconFromSettingChoice(getResources(), aprsIcon));
+    private void applyAprsIcon(RadioAudioService service, String aprsIcon) {
+        if (aprsIcon != null) {
+            service.setAprsPositionIcon(SettingsActivity.getAPRSIconFromSettingChoice(getResources(), aprsIcon));
         }
+    }
 
-        String digipeat = settings.get(AppSetting.SETTING_DIGIPEAT_PACKETS);
-        if (digipeat != null && radioAudioService != null) {
-            radioAudioService.setDigipeatPackets(Boolean.parseBoolean(digipeat));
+    private void applyDigipeatSetting(RadioAudioService service, String digipeat) {
+        if (digipeat != null) {
+            service.setDigipeatPackets(Boolean.parseBoolean(digipeat));
         }
     }
 
     @SuppressLint("ClickableViewAccessibility")
+    // Listener wiring remains co-located so control interactions can be reviewed together.
+    @SuppressWarnings("java:S3776")
     private void attachListeners() {
         ImageButton pttButton = findViewById(R.id.pttButton);
-        pttButton.setOnTouchListener((v, event) -> {
-            boolean touchHandled = false;
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_DOWN:
-                    if (!v.isClickable()) {
-                        touchHandled = true;
-                        break;
-                    }
+        pttButton.setOnTouchListener(this::handlePttTouch);
 
-                    if (null != radioAudioService && !radioAudioService.isTxAllowed()) {
-                        touchHandled = true;
-                        showSimpleSnackbar(getString(R.string.can_t_tx_outside_ham_band));
-                        break;
-                    }
-
-                    pttButtonDebounceHandler.removeCallbacksAndMessages(null);
-                    if (stickyPTT) {
-                        if (radioAudioService != null && radioAudioService.getMode() == RadioMode.RX) {
-                            ((Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(100);
-                            if (radioAudioService != null) {
-                                // If the user tries to transmit, stop scanning so we don't
-                                // move to a different frequency during or after the tx.
-                                radioAudioService.setScanning(false, false);
-                                setScanningUi(false);
-                                radioAudioService.startPtt();
-                            }
-                            startPttUi(false);
-                        } else if (radioAudioService != null && radioAudioService.getMode() == RadioMode.TX) {
-                            ((Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(100);
-                            if (radioAudioService != null) {
-                                radioAudioService.endPtt();
-                            }
-                            endPttUi();
-                        }
-                    } else {
-                        if (!isRecording) {
-                            ((Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(100);
-                            if (radioAudioService != null) {
-                                // If the user tries to transmit, stop scanning so we don't
-                                // move to a different frequency during or after the tx.
-                                radioAudioService.setScanning(false, false);
-                                setScanningUi(false);
-                                radioAudioService.startPtt();
-                            }
-                            startPttUi(false);
-                        }
-                    }
-                    touchHandled = true;
-                    break;
-                case MotionEvent.ACTION_UP:
-                    if (!v.isClickable()) {
-                        touchHandled = true;
-                        break;
-                    }
-                    pttButtonDebounceHandler.removeCallbacksAndMessages(null);
-                    if (!stickyPTT) {
-                        pttButtonDebounceHandler.postDelayed(() -> {
-                            if (radioAudioService != null) {
-                                radioAudioService.endPtt();
-                            }
-                            endPttUi();
-                        }, 250);
-                    }
-                    touchHandled = true;
-                    break;
-            }
-            return touchHandled;
-        });
-
-        pttButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
+        pttButton.setOnClickListener(v -> {
                 // This click handler is only for TalkBack users who also have stickyPTT enabled.
                 // It's so they can use the typical quick double-tap to toggle PTT on and off. So
                 // if stickyPTT isn't being used, don't handle a click on the PTT button (they need
@@ -1200,21 +978,17 @@ public class MainActivity extends AppCompatActivity {
                     }
                     endPttUi();
                 }
-            }
         });
 
         EditText activeFrequencyField = findViewById(R.id.activeFrequency);
-        activeFrequencyField.setOnEditorActionListener(new TextView.OnEditorActionListener() {
-            @Override
-            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                if (radioAudioService != null) {
-                    radioAudioService.tuneToFreq(activeFrequencyField.getText().toString());
-                }
-
-                hideKeyboard();
-                activeFrequencyField.clearFocus();
-                return true;
+        activeFrequencyField.setOnEditorActionListener((v, actionId, event) -> {
+            if (radioAudioService != null) {
+                radioAudioService.tuneToFreq(activeFrequencyField.getText().toString());
             }
+
+            hideKeyboard();
+            activeFrequencyField.clearFocus();
+            return true;
         });
 
         final View rootView = findViewById(android.R.id.content);
@@ -1224,9 +998,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Track if keyboard is likely visible (and/or screen got short for some reason), so we can
         // make room for critical UI components that must be visible.
-        rootView.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-            @Override
-            public void onGlobalLayout() {
+        rootView.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
                 // When in chat, we need enough vertical space for the user to see their text
                 // input box, and any prior chat message they may be replying to. Not necessary in
                 // voice mode.
@@ -1257,31 +1029,116 @@ public class MainActivity extends AppCompatActivity {
                     frequencyView.setVisibility(VISIBLE);
                     rxAudioCircleView.setVisibility(VISIBLE);
                 }
-            }
         });
     }
 
-    private void updateSMeter(int value) {
-        if (value < 0 || value > 9) {
-            Log.d("DEBUG", "Warning: Unexpected S-Meter value (" + value + ") in updateSMeter().");
+    private boolean handlePttTouch(View view, MotionEvent event) {
+        if (!view.isClickable()) {
+            return true;
+        }
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            handlePttPress();
+            return true;
+        }
+        if (event.getAction() == MotionEvent.ACTION_UP) {
+            handlePttRelease();
+            return true;
+        }
+        return false;
+    }
+
+    private void handlePttPress() {
+        if (radioAudioService != null && !radioAudioService.isTxAllowed()) {
+            showSimpleSnackbar(getString(R.string.can_t_tx_outside_ham_band));
             return;
         }
+        pttButtonDebounceHandler.removeCallbacksAndMessages(null);
+        if (stickyPTT) {
+            toggleStickyPtt();
+        } else if (radioAudioService == null || !radioAudioService.isVoiceCaptureActive()) {
+            startPttFromButton();
+        }
+    }
+
+    private void toggleStickyPtt() {
+        if (radioAudioService == null) {
+            return;
+        }
+        if (radioAudioService.getMode() == RadioMode.RX) {
+            startPttFromButton();
+        } else if (radioAudioService.getMode() == RadioMode.TX) {
+            vibrateForPtt();
+            radioAudioService.endPtt();
+            endPttUi();
+        }
+    }
+
+    private void startPttFromButton() {
+        vibrateForPtt();
+        if (radioAudioService != null) {
+            radioAudioService.setScanning(false, false);
+            setScanningUi(false);
+            radioAudioService.startPtt();
+        }
+        startPttUi(false);
+    }
+
+    private void handlePttRelease() {
+        pttButtonDebounceHandler.removeCallbacksAndMessages(null);
+        if (!stickyPTT) {
+            pttButtonDebounceHandler.postDelayed(() -> {
+                if (radioAudioService != null) {
+                    radioAudioService.endPtt();
+                }
+                endPttUi();
+            }, 250);
+        }
+    }
+
+    private void vibrateForPtt() {
+        ((Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(100);
+    }
+
+    // Kept as an Activity helper: it is also useful outside the service callback.
+    @SuppressWarnings("java:S3398")
+    private void updateSMeter(int value) {
+        if (value < 0 || value > S_METER_MAX_VALUE) {
+            Log.d(LOG_TAG, "Warning: Unexpected S-Meter value (" + value + ") in updateSMeter().");
+            return;
+        }
+        currentSMeterValue = value;
 
         final float S_METER_ON_ALPHA = 1.0f;
         final float S_METER_OFF_ALPHA = 0.2f;
+        final int primaryColor = ContextCompat.getColor(this, R.color.primary);
+        final int overS9Color = ContextCompat.getColor(this, R.color.over_s9);
+        final int overloadColor = ContextCompat.getColor(this, R.color.overload);
+        final int txColor = ContextCompat.getColor(this, R.color.accent);
+        int[] sMeterIds = {
+            R.id.sMeter1, R.id.sMeter2, R.id.sMeter3,
+            R.id.sMeter4, R.id.sMeter5, R.id.sMeter6,
+            R.id.sMeter7, R.id.sMeter8, R.id.sMeter9,
+            R.id.sMeter10, R.id.sMeter11, R.id.sMeter12,
+            R.id.sMeter13
+        };
 
-        findViewById(R.id.sMeter1).setAlpha(value > 0 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter2).setAlpha(value > 1 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter3).setAlpha(value > 2 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter4).setAlpha(value > 3 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter5).setAlpha(value > 4 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter6).setAlpha(value > 5 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter7).setAlpha(value > 6 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter8).setAlpha(value > 7 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
-        findViewById(R.id.sMeter9).setAlpha(value > 8 ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
+        for (int i = 0; i < sMeterIds.length; i++) {
+            View bar = findViewById(sMeterIds[i]);
+            boolean active = value > i;
+            int color = primaryColor;
+            if (active && moduleTxActive) {
+                color = txColor;
+            } else if (active && i == 12) {
+                color = overloadColor;
+            } else if (active && i >= 9) {
+                color = overS9Color;
+            }
+            bar.setBackgroundColor(color);
+            bar.setAlpha(active ? S_METER_ON_ALPHA : S_METER_OFF_ALPHA);
+        }
 
         View sMeterView = findViewById(R.id.sMeter);
-        sMeterView.setContentDescription("S meter " + value + " of 9");
+        sMeterView.setContentDescription("S meter " + value + " of " + S_METER_MAX_VALUE);
     }
 
     private void hideKeyboard() {
@@ -1341,12 +1198,25 @@ public class MainActivity extends AppCompatActivity {
         if (initialRadioUiSynced || !pendingInitialRadioUiSync || radioAudioService == null) {
             return;
         }
+        if (syncRadioUiFromDeviceState()) {
+            pendingInitialRadioUiSync = false;
+            initialRadioUiSynced = true;
+        }
+    }
+
+    /**
+     * Mirrors firmware's applied radio config into the visible frequency/memory controls.
+     */
+    private boolean syncRadioUiFromDeviceState() {
+        if (radioAudioService == null) {
+            return false;
+        }
         RadioModuleController radioModule = radioAudioService.getRadioModule();
         if (!radioModule.hasRadioConfig()) {
-            return;
+            return false;
         }
         if (radioModule.getMemoryId() >= 0 && viewModel.getChannelMemories().getValue() == null) {
-            return;
+            return false;
         }
 
         ChannelMemory memory = findMatchingMemoryForState();
@@ -1358,8 +1228,7 @@ public class MainActivity extends AppCompatActivity {
             tuneToFreqUi(String.format(java.util.Locale.US, "%.4f", radioModule.getRxFrequency()));
         }
         radioAudioService.updateNotificationFromCurrentState();
-        pendingInitialRadioUiSync = false;
-        initialRadioUiSynced = true;
+        return true;
     }
 
     /**
@@ -1447,23 +1316,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showMemoryName(String name) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                TextView activeFrequencyField = findViewById(R.id.activeMemoryName);
-                activeFrequencyField.setText(name);
-            }
+        runOnUiThread(() -> {
+            TextView activeFrequencyField = findViewById(R.id.activeMemoryName);
+            activeFrequencyField.setText(name);
         });
     }
 
     private void showFrequency(String frequency) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                EditText activeFrequencyField = findViewById(R.id.activeFrequency);
-                activeFrequencyField.setText(frequency);
-                activeFrequencyStr = frequency;
-            }
+        runOnUiThread(() -> {
+            EditText activeFrequencyField = findViewById(R.id.activeFrequency);
+            activeFrequencyField.setText(frequency);
+            activeFrequencyStr = frequency;
         });
     }
 
@@ -1474,7 +1337,7 @@ public class MainActivity extends AppCompatActivity {
     @SuppressWarnings("java:S3398")
     private void showBand(BandType bandType) {
         runOnUiThread(() -> {
-            EditText bandField = findViewById(R.id.activeBand);
+            TextView bandField = findViewById(R.id.activeBand);
             if (bandField == null) return;
             switch (bandType) {
                 case BAND_VHF:
@@ -1495,12 +1358,12 @@ public class MainActivity extends AppCompatActivity {
 
     protected void startPttUi(boolean dataMode) {
         if (!dataMode) {
-            startRecording();
+            findViewById(R.id.pttButton).setBackground(getDrawable(R.drawable.ptt_button_on));
         }
     }
 
     protected void endPttUi() {
-        stopRecording();
+        findViewById(R.id.pttButton).setBackground(getDrawable(R.drawable.ptt_button));
     }
 
     public void ensurePermissions(List<String> requestedPerms, Consumer<Boolean> callback) {
@@ -1545,6 +1408,10 @@ public class MainActivity extends AppCompatActivity {
                 reasons.add("• Precise location — to include GPS in APRS/beacons");
             } else if (Manifest.permission.POST_NOTIFICATIONS.equals(p) && Build.VERSION.SDK_INT >= 33) {
                 reasons.add("• Notifications — to alert you about APRS messages and status");
+            } else if (Manifest.permission.BLUETOOTH_SCAN.equals(p) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                reasons.add("• Nearby devices — to find your kv4p HT over BLE");
+            } else if (Manifest.permission.BLUETOOTH_CONNECT.equals(p) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                reasons.add("• Bluetooth connection — to communicate with your kv4p HT over BLE");
             } else if (Manifest.permission.ACCESS_BACKGROUND_LOCATION.equals(p)) {
                 reasons.add("• Background location — to send beacons with the screen off");
             }
@@ -1573,107 +1440,11 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void initAudioRecorder() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-        if (null != audioRecord) {
-            audioRecord.stop();
-            audioRecord.release();
-            audioRecord = null;
-        }
-        audioRecord = new AudioRecord(MediaRecorder.AudioSource.MIC,
-                RadioAudioService.AUDIO_SAMPLE_RATE,
-                channelConfig,
-                audioFormat,
-                minBufferSize);
-        if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-            Log.d("DEBUG", "Audio init error");
-        }
-    }
-
-    private void startRecording() {
-        if (audioRecord == null) {
-            initAudioRecorder();
-        }
-
-        // After attempting to initialize, check if it's usable.
-        if (audioRecord == null || audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-            Log.d("DEBUG", "AudioRecord not ready, cannot start recording.");
-            // If it's not null, it's in a bad state. Release it so we can try again next time.
-            if (audioRecord != null) {
-                audioRecord.release();
-                audioRecord = null;
-            }
-            return;
-        }
-
-        ImageButton pttButton = findViewById(R.id.pttButton);
-        pttButton.setBackground(getDrawable(R.drawable.ptt_button_on));
-
-        audioRecord.startRecording();
-        isRecording = true;
-
-        recordingThread = new Thread(new Runnable() {
-            public void run() {
-                processAudioStream();
-            }
-        }, "AudioRecorder Thread");
-
-        recordingThread.start();
-    }
-
-    private void processAudioStream() {
-        float audioChunkSampleTotal = 0.0f; // Accumulate across buffers
-        int accumulatedSamples = 0; // Track count of samples
-        int samplesPerAnimFrame = RadioAudioService.AUDIO_SAMPLE_RATE / RECORD_ANIM_FPS;
-        short[] audioBuffer = new short[RadioAudioService.AUDIO_FRAME_SAMPLES];
-        while (isRecording) {
-            int samples = audioRecord.read(audioBuffer, 0, RadioAudioService.AUDIO_FRAME_SAMPLES, AudioRecord.READ_BLOCKING);
-            if (samples == RadioAudioService.AUDIO_FRAME_SAMPLES) {
-                if (null == radioAudioService || !radioAudioService.isRadioConnected()) {
-                    Log.d("DEBUG", "Error: Could not contact radio in processAudioStream() while recording.");
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            stopRecording();
-                        }
-                    });
-                    return;
-                }
-                radioAudioService.sendAudioToESP32(audioBuffer, false);
-                // Accumulate samples across buffers
-                for (int i = 0; i < samples; i++) {
-                    audioChunkSampleTotal += Math.abs(audioBuffer[i] / 32768.0f) * 8.0f;
-                    accumulatedSamples++;
-                    // If we have enough samples, update visualization
-                    if (accumulatedSamples >= samplesPerAnimFrame) {
-                        updateRecordingVisualization(0, audioChunkSampleTotal / accumulatedSamples);
-                        // Reset accumulators
-                        audioChunkSampleTotal = 0.0f;
-                        accumulatedSamples = 0;
-                    }
-                }
-            }
-        }
-    }
-
-    private void stopRecording() {
-        if (audioRecord != null) {
-            isRecording = false;
-            audioRecord.stop();
-            audioRecord.release();
-            audioRecord = null;
-            recordingThread = null;
-            updateRecordingVisualization(100, 0.0f);
-        }
-        ImageButton pttButton = findViewById(R.id.pttButton);
-        pttButton.setBackground(getDrawable(R.drawable.ptt_button));
-    }
-
+    // Kept as an Activity helper so Snackbar presentation remains centralized.
+    @SuppressWarnings("java:S3398")
     private void showUSBSnackbar() {
         CharSequence snackbarMsg = getString(R.string.radio_not_found);
-        usbSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, Snackbar.LENGTH_INDEFINITE)
+        usbSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, BaseTransientBottomBar.LENGTH_INDEFINITE)
             .setBackgroundTint(Color.rgb(140, 20, 0)).setActionTextColor(Color.WHITE).setTextColor(Color.WHITE)
             .setAnchorView(findViewById(R.id.bottomNavigationView));
 
@@ -1686,9 +1457,11 @@ public class MainActivity extends AppCompatActivity {
         usbSnackbar.show();
     }
 
+    // Kept as an Activity helper so Snackbar presentation remains centralized.
+    @SuppressWarnings("java:S3398")
     private void showHandshakeSnackbar() {
         CharSequence snackbarMsg = getString(R.string.handshake_message);
-        usbSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, Snackbar.LENGTH_INDEFINITE)
+        usbSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, BaseTransientBottomBar.LENGTH_INDEFINITE)
             .setBackgroundTint(getResources().getColor(R.color.primary))
             .setTextColor(getResources().getColor(R.color.medium_gray))
             .setAnchorView(findViewById(R.id.bottomNavigationView));
@@ -1700,9 +1473,11 @@ public class MainActivity extends AppCompatActivity {
         usbSnackbar.show();
     }
 
+    // Kept as an Activity helper so Snackbar presentation remains centralized.
+    @SuppressWarnings("java:S3398")
     private void showRadioModuleNotFoundSnackbar() {
         CharSequence snackbarMsg = getString(R.string.module_not_found_message);
-        radioModuleNotFoundSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, Snackbar.LENGTH_INDEFINITE)
+        radioModuleNotFoundSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, BaseTransientBottomBar.LENGTH_INDEFINITE)
                 .setBackgroundTint(Color.rgb(140, 20, 0)).setActionTextColor(Color.WHITE).setTextColor(Color.WHITE)
                 .setAnchorView(findViewById(R.id.bottomNavigationView));
 
@@ -1719,18 +1494,17 @@ public class MainActivity extends AppCompatActivity {
      * Alerts the user to missing or old firmware with the option to flash the latest.
      * @param firmwareVer The currently installed firmware version, or -1 if no firmware installed.
      */
+    // Kept as an Activity helper so Snackbar presentation remains centralized.
+    @SuppressWarnings("java:S3398")
     private void showVersionSnackbar(int firmwareVer) {
-        final Context ctx = this;
-        CharSequence snackbarMsg = firmwareVer == -1 ? getString(R.string.no_firmware_installed) : getString(R.string.new_firmware_available);
-        versionSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, Snackbar.LENGTH_INDEFINITE)
+        CharSequence snackbarMsg = getString(firmwareVer == -1
+                ? R.string.no_firmware_installed : R.string.new_firmware_available);
+        versionSnackbar = Snackbar.make(this, findViewById(R.id.mainTopLevelLayout), snackbarMsg, BaseTransientBottomBar.LENGTH_INDEFINITE)
                 .setBackgroundTint(Color.rgb(140, 20, 0)).setActionTextColor(Color.WHITE).setTextColor(Color.WHITE)
-                .setAction("Flash now", new View.OnClickListener() {
-                    @Override
-                    public void onClick(View view) {
-                        startFirmwareActivity();
-                    }
-                })
                 .setAnchorView(findViewById(R.id.bottomNavigationView));
+        if (canFlashFirmware()) {
+            versionSnackbar.setAction("Flash now", view -> startFirmwareActivity());
+        }
 
         // Make the text of the snackbar larger.
         TextView snackbarActionTextView = (TextView) versionSnackbar.getView().findViewById(com.google.android.material.R.id.snackbar_action);
@@ -1744,7 +1518,7 @@ public class MainActivity extends AppCompatActivity {
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         public void onReceive(Context context, Intent intent) {
             Thread thread = Thread.currentThread();
-            Log.d("DEBUG", "usbReceiver.onReceive() action=" + intent.getAction()
+            Log.d(LOG_TAG, "usbReceiver.onReceive() action=" + intent.getAction()
                 + " thread=" + thread.getName() + "#" + thread.getId());
 
             String action = intent.getAction();
@@ -1752,7 +1526,7 @@ public class MainActivity extends AppCompatActivity {
                 if (ACTION_USB_PERMISSION.equals(action) || UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
                     if (ACTION_USB_PERMISSION.equals(action)
                         && !intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                        Log.w("DEBUG", "USB permission denied by user.");
+                        Log.w(LOG_TAG, "USB permission denied by user.");
                         if (radioAudioService != null) {
                             radioAudioService.onUsbPermissionDenied();
                         }
@@ -1771,7 +1545,7 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
-    public void scanClicked(View view) {
+    public void scanClicked(View view) { // NOSONAR S1172: XML onClick signature requires View.
         setScanningUi((radioAudioService != null) && (radioAudioService.getMode()) != RadioMode.SCAN); // Toggle scanning on/off
         if (radioAudioService != null) {
             radioAudioService.setScanning(radioAudioService.getMode() != RadioMode.SCAN, true);
@@ -1805,26 +1579,16 @@ public class MainActivity extends AppCompatActivity {
     private void setScanningUi(boolean scanning) {
         AppCompatButton scanButton = findViewById(R.id.scanButton);
         if (!scanning) {
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    scanButton.setText(R.string.scan);
-                }
-            });
+            runOnUiThread(() -> scanButton.setText(R.string.scan));
 
         } else { // Start scanning
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    scanButton.setText(R.string.stop_scan);
-                }
-            });
+            runOnUiThread(() -> scanButton.setText(R.string.stop_scan));
         }
     }
 
-    public void addMemoryClicked(View view) {
+    public void addMemoryClicked(View view) { // NOSONAR S1172: XML onClick signature requires View.
         Intent intent = new Intent("com.vagell.kv4pht.ADD_MEMORY_ACTION");
-        intent.putExtra("requestCode", REQUEST_ADD_MEMORY);
+        intent.putExtra(EXTRA_REQUEST_CODE, REQUEST_ADD_MEMORY);
         intent.putExtra("activeFrequencyStr", activeFrequencyStr);
         intent.putExtra("selectedMemoryGroup", selectedMemoryGroup);
         intent.putExtra("isVhfRadio", (radioAudioService != null && radioAudioService.getRadioType().equals(RadioAudioService.RadioModuleType.VHF)));
@@ -1841,12 +1605,9 @@ public class MainActivity extends AppCompatActivity {
             groupsMenu.getMenu().add(groupName);
         }
 
-        groupsMenu.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
-            @Override
-            public boolean onMenuItemClick(MenuItem item) {
-                selectMemoryGroup(item.getTitle().toString());
-                return true;
-            }
+        groupsMenu.setOnMenuItemClickListener(item -> {
+            selectMemoryGroup(item.getTitle().toString());
+            return true;
         });
 
         groupsMenu.show();
@@ -1861,17 +1622,14 @@ public class MainActivity extends AppCompatActivity {
         groupSelector.setText(groupName + " ▼");
 
         // Save most recent group selection so we can restore it on app restart
-        threadPoolExecutor.execute(new Runnable() {
-            @Override
-            public void run() {
-                AppSetting lastGroupSetting = viewModel.getAppDb().appSettingDao().getByName(AppSetting.SETTING_LAST_GROUP);
-                if (lastGroupSetting != null) {
-                    lastGroupSetting.value = groupName;
-                    viewModel.getAppDb().appSettingDao().update(lastGroupSetting);
-                } else {
-                    lastGroupSetting = new AppSetting(AppSetting.SETTING_LAST_GROUP, groupName);
-                    viewModel.getAppDb().appSettingDao().insertAll(lastGroupSetting);
-                }
+        threadPoolExecutor.execute(() -> {
+            AppSetting lastGroupSetting = viewModel.getAppDb().appSettingDao().getByName(AppSetting.SETTING_LAST_GROUP);
+            if (lastGroupSetting != null) {
+                lastGroupSetting.value = groupName;
+                viewModel.getAppDb().appSettingDao().update(lastGroupSetting);
+            } else {
+                lastGroupSetting = new AppSetting(AppSetting.SETTING_LAST_GROUP, groupName);
+                viewModel.getAppDb().appSettingDao().insertAll(lastGroupSetting);
             }
         });
     }
@@ -1882,57 +1640,81 @@ public class MainActivity extends AppCompatActivity {
 
         switch (requestCode) {
             case REQUEST_ADD_MEMORY:
-                if (resultCode == Activity.RESULT_OK) {
-                    viewModel.loadDataAsync(() -> runOnUiThread(() -> memoriesAdapter.notifyDataSetChanged()));
-                }
+                handleAddMemoryResult(resultCode);
                 break;
             case REQUEST_EDIT_MEMORY:
-                if (resultCode == Activity.RESULT_OK) {
-                    // Add an observer to the model so we know when it's done reloading
-                    // the edited memory, so we can tune to it.
-                    final int editedMemoryId = data.getExtras().getInt("memoryId");
-                    viewModel.loadDataAsync(() -> runOnUiThread(() -> {
-                        memoriesAdapter.notifyDataSetChanged();
-                        // Tune to the edited memory to force any changes to be applied (e.g. new tone
-                        // or frequency).
-                        List<ChannelMemory> channelMemories = viewModel.getChannelMemories().getValue();
-                        if (channelMemories != null) {
-                            for (int i = 0; i < channelMemories.size(); i++) {
-                                if (channelMemories.get(i).memoryId == editedMemoryId) {
-                                    viewModel.highlightMemory(channelMemories.get(i));
-
-                                    if (radioAudioService != null) {
-                                        radioAudioService.tuneToMemory(channelMemories.get(i));
-                                    }
-                                }
-                            }
-                        }
-                    }));
-                }
+                handleEditMemoryResult(resultCode, data);
                 break;
             case REQUEST_SETTINGS:
-                if (resultCode == Activity.RESULT_OK && data != null && radioAudioService != null) {
-                    applyRadioSettingsResult(data);
-                }
-                viewModel.loadDataAsync(this::applySettings);
+                handleSettingsResult(resultCode, data);
                 break;
             case REQUEST_FIRMWARE:
-                if (resultCode == Activity.RESULT_OK) {
-                    showSimpleSnackbar(getString(R.string.successfully_updated_firmware));
-                    // Try to reconnect now that the kv4p HT firmware should be present
-                    if (radioAudioService != null) {
-                        radioAudioService.renegotiateAfterFlashing();
-                    }
-                }
+                handleFirmwareResult(resultCode);
                 break;
             case REQUEST_FIND_REPEATERS:
-                if (resultCode == Activity.RESULT_OK) {
-                    viewModel.loadDataAsync(() -> runOnUiThread(() -> memoriesAdapter.notifyDataSetChanged()));
-                }
+                handleFindRepeatersResult(resultCode);
                 break;
             default:
-                Log.d("DEBUG", "Warning: Returned to MainActivity from unexpected request code: " + requestCode);
+                Log.d(LOG_TAG, "Warning: Returned to MainActivity from unexpected request code: " + requestCode);
         }
+    }
+
+    private void handleAddMemoryResult(int resultCode) {
+        if (resultCode == Activity.RESULT_OK) {
+            reloadMemories();
+        }
+    }
+
+    private void handleEditMemoryResult(int resultCode, @Nullable Intent data) {
+        if (resultCode != Activity.RESULT_OK || data == null || !data.hasExtra(EXTRA_MEMORY_ID)) {
+            return;
+        }
+        int editedMemoryId = data.getIntExtra(EXTRA_MEMORY_ID, -1);
+        viewModel.loadDataAsync(() -> runOnUiThread(() -> tuneToEditedMemory(editedMemoryId)));
+    }
+
+    private void tuneToEditedMemory(int memoryId) {
+        memoriesAdapter.notifyDataSetChanged();
+        List<ChannelMemory> channelMemories = viewModel.getChannelMemories().getValue();
+        if (channelMemories == null) {
+            return;
+        }
+        for (ChannelMemory memory : channelMemories) {
+            if (memory.memoryId == memoryId) {
+                viewModel.highlightMemory(memory);
+                if (radioAudioService != null) {
+                    radioAudioService.tuneToMemory(memory);
+                }
+                return;
+            }
+        }
+    }
+
+    private void handleSettingsResult(int resultCode, @Nullable Intent data) {
+        if (resultCode == Activity.RESULT_OK && data != null && radioAudioService != null) {
+            applyRadioSettingsResult(data);
+        }
+        viewModel.loadDataAsync(this::applySettings);
+    }
+
+    private void handleFirmwareResult(int resultCode) {
+        if (resultCode != Activity.RESULT_OK) {
+            return;
+        }
+        showSimpleSnackbar(getString(R.string.successfully_updated_firmware));
+        if (radioAudioService != null) {
+            radioAudioService.renegotiateAfterFlashing();
+        }
+    }
+
+    private void handleFindRepeatersResult(int resultCode) {
+        if (resultCode == Activity.RESULT_OK) {
+            reloadMemories();
+        }
+    }
+
+    private void reloadMemories() {
+        viewModel.loadDataAsync(() -> runOnUiThread(() -> memoriesAdapter.notifyDataSetChanged()));
     }
 
     private void showSimpleSnackbar(String msg) {
@@ -1948,6 +1730,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startFirmwareActivity() {
+        if (!canFlashFirmware()) {
+            showSimpleSnackbar(getString(R.string.firmware_flash_requires_usb));
+            return;
+        }
         // Stop any scanning or transmitting
         if (radioAudioService != null) {
             radioAudioService.setScanning(false);
@@ -1961,7 +1747,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Actually start the firmware activity
         Intent intent = new Intent("com.vagell.kv4pht.FIRMWARE_ACTION");
-        intent.putExtra("requestCode", REQUEST_FIRMWARE);
+        intent.putExtra(EXTRA_REQUEST_CODE, REQUEST_FIRMWARE);
         startActivityForResult(intent, REQUEST_FIRMWARE);
     }
 
@@ -1988,16 +1774,18 @@ public class MainActivity extends AppCompatActivity {
         setScanningUi(false);
 
         Intent intent = new Intent("com.vagell.kv4pht.SETTINGS_ACTION");
-        intent.putExtra("requestCode", REQUEST_SETTINGS);
-        if (radioAudioService != null && radioAudioService.isRadioConnected()) {
+        intent.putExtra(EXTRA_REQUEST_CODE, REQUEST_SETTINGS);
+        RadioModuleController radioModule = radioAudioService == null ? null : radioAudioService.getRadioModule();
+        if (radioAudioService != null && radioAudioService.isRadioConnected() && radioModule != null) {
             intent.putExtra("hasHighLowPowerSwitch", radioAudioService.isHasHighLowPowerSwitch());
-            intent.putExtra("firmwareVersion", radioAudioService.getRadioModule().getFirmwareVersionNumber());
-            intent.putExtra(SettingsActivity.EXTRA_RF_POWER_HIGH, radioAudioService.getRadioModule().isHighPowerEnabled());
-            intent.putExtra(SettingsActivity.EXTRA_BANDWIDTH, radioAudioService.getRadioModule().getBandwidthLabel());
-            intent.putExtra(SettingsActivity.EXTRA_SQUELCH, radioAudioService.getRadioModule().getDesiredSquelch());
-            intent.putExtra(SettingsActivity.EXTRA_FILTER_PRE, radioAudioService.getRadioModule().isPreEmphasisEnabled());
-            intent.putExtra(SettingsActivity.EXTRA_FILTER_HIGH, radioAudioService.getRadioModule().isHighpassEnabled());
-            intent.putExtra(SettingsActivity.EXTRA_FILTER_LOW, radioAudioService.getRadioModule().isLowpassEnabled());
+            intent.putExtra("firmwareVersion", radioModule.getFirmwareVersionNumber());
+            intent.putExtra(SettingsActivity.EXTRA_RF_POWER_HIGH, radioModule.isHighPowerEnabled());
+            intent.putExtra(SettingsActivity.EXTRA_FREEDV_2400B_ENABLED, radioAudioService.isFreeDv2400bEnabled());
+            intent.putExtra(SettingsActivity.EXTRA_BANDWIDTH, radioModule.getBandwidthLabel());
+            intent.putExtra(SettingsActivity.EXTRA_SQUELCH, radioModule.getDesiredSquelch());
+            intent.putExtra(SettingsActivity.EXTRA_FILTER_PRE, radioModule.isPreEmphasisEnabled());
+            intent.putExtra(SettingsActivity.EXTRA_FILTER_HIGH, radioModule.isHighpassEnabled());
+            intent.putExtra(SettingsActivity.EXTRA_FILTER_LOW, radioModule.isLowpassEnabled());
         }
         startActivityForResult(intent, REQUEST_SETTINGS);
     }
@@ -2009,6 +1797,8 @@ public class MainActivity extends AppCompatActivity {
         radioAudioService.getRadioModule().beginUpdate();
         try {
             radioAudioService.getRadioModule().setHighPower(data.getBooleanExtra(SettingsActivity.EXTRA_RF_POWER_HIGH, true));
+            radioAudioService.setFreeDv2400bEnabled(
+                data.getBooleanExtra(SettingsActivity.EXTRA_FREEDV_2400B_ENABLED, false));
             radioAudioService.getRadioModule().setBandwidth(data.getStringExtra(SettingsActivity.EXTRA_BANDWIDTH));
             radioAudioService.getRadioModule().setSquelch(data.getIntExtra(SettingsActivity.EXTRA_SQUELCH, radioAudioService.getRadioModule().getDesiredSquelch()));
             radioAudioService.getRadioModule().setFilters(
@@ -2018,6 +1808,7 @@ public class MainActivity extends AppCompatActivity {
         } finally {
             radioAudioService.getRadioModule().endUpdate();
         }
+        updateVoiceModeCaption();
 
         // This simple setting is needed by RadioAudioService, but doesn't need to be sent to the module.
         radioAudioService.setAprsPositionIcon(
@@ -2030,9 +1821,7 @@ public class MainActivity extends AppCompatActivity {
         PopupMenu moreMenu = new PopupMenu(themedContext, view);
         moreMenu.inflate(R.menu.more_menu);
         MainActivity activity = this;
-        moreMenu.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
-            @Override
-            public boolean onMenuItemClick(MenuItem item) {
+        moreMenu.setOnMenuItemClickListener(item -> {
                 if (item.getItemId() == R.id.import_from_repeaterbook) {
                     startFindRepeatersActivity();
                 } else if (item.getItemId() == R.id.flash_firmware) {
@@ -2050,13 +1839,16 @@ public class MainActivity extends AppCompatActivity {
                     startSettingsActivity();
                 }
                 return true;
-            }
         });
 
         boolean showRadioOptions = radioAudioService != null && radioAudioService.isRadioConnected();
-        moreMenu.getMenu().findItem(R.id.flash_firmware).setEnabled(showRadioOptions);
+        moreMenu.getMenu().findItem(R.id.flash_firmware).setEnabled(canFlashFirmware());
         moreMenu.getMenu().findItem(R.id.import_from_repeaterbook).setEnabled(showRadioOptions);
         moreMenu.show();
+    }
+
+    private boolean canFlashFirmware() {
+        return radioAudioService != null && radioAudioService.canFlashFirmware();
     }
 
     /**
@@ -2070,7 +1862,7 @@ public class MainActivity extends AppCompatActivity {
      */
     public void doShowNotification(String notificationChannelId, int notificationTypeId, String title, String message, String tapIntentName) {
         if (notificationChannelId == null || title == null || message == null) {
-            Log.d("DEBUG", "Unexpected null in showNotification.");
+            Log.d(LOG_TAG, "Unexpected null in showNotification.");
             return;
         }
         // Has the user disallowed notifications?

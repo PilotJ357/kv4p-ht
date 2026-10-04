@@ -19,10 +19,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 package com.vagell.kv4pht.ui;
 
 import android.app.Activity;
+import android.Manifest;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.ServiceConnection;
 import android.content.res.Resources;
 import android.graphics.Color;
@@ -39,11 +41,13 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import androidx.lifecycle.ViewModelProvider;
 import com.google.android.material.slider.Slider;
+
+import static com.google.android.material.snackbar.Snackbar.LENGTH_LONG;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
 import com.vagell.kv4pht.BuildConfig;
 import com.vagell.kv4pht.R;
-import com.vagell.kv4pht.aprs.parser.APRSIconType;
+import com.vagell.kv4pht.data.AprsFeedPolicy;
 import com.vagell.kv4pht.data.AppSetting;
 import com.vagell.kv4pht.radio.RadioAudioService;
 
@@ -57,11 +61,28 @@ import java.util.stream.Collectors;
 
 public class SettingsActivity extends AppCompatActivity {
     private static final String TAG = SettingsActivity.class.getSimpleName();
+    private static final int[] APRS_ICON_CHOICE_RESOURCES = {
+            R.string.aprs_icon_phone, R.string.aprs_icon_person, R.string.aprs_icon_house,
+            R.string.aprs_icon_bicycle, R.string.aprs_icon_car, R.string.aprs_icon_jeep,
+            R.string.aprs_icon_truck, R.string.aprs_icon_motorcycle, R.string.aprs_icon_van,
+            R.string.aprs_icon_rv, R.string.aprs_icon_18_wheeler, R.string.aprs_icon_glider,
+            R.string.aprs_icon_small_aircraft, R.string.aprs_icon_helicopter,
+            R.string.aprs_icon_sailboat, R.string.aprs_icon_motorboat
+    };
+    private static final APRSIconType[] APRS_ICON_TYPES = {
+            APRSIconType.T_PHONE, APRSIconType.T_PERSON, APRSIconType.T_HOUSE,
+            APRSIconType.T_BICYCLE, APRSIconType.T_CAR, APRSIconType.T_JEEP,
+            APRSIconType.T_TRUCK, APRSIconType.T_MOTORCYCLE, APRSIconType.T_VAN,
+            APRSIconType.T_RV, APRSIconType.T_18_WHEELER, APRSIconType.T_GLIDER,
+            APRSIconType.T_SMALL_AIRCRAFT, APRSIconType.T_HELICOPTER,
+            APRSIconType.T_SAILBOAT, APRSIconType.T_MOTORBOAT
+    };
     private final ExecutorService threadPoolExecutor = Executors.newSingleThreadExecutor();
     private MainViewModel viewModel = null;
     private boolean hasHighLowPowerSwitch = false;
     private int firmwareVersion = -1;
     public static final String EXTRA_RF_POWER_HIGH = "rfPowerHigh";
+    public static final String EXTRA_FREEDV_2400B_ENABLED = "freeDv2400bEnabled";
     public static final String EXTRA_BANDWIDTH = "bandwidth";
     public static final String EXTRA_SQUELCH = "squelch";
     public static final String EXTRA_FILTER_PRE = "filterPre";
@@ -215,6 +236,8 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void populateAprsOptions() {
         setDropdownOptions(R.id.aprsPositionAccuracyTextView, List.of("Exact", "Approx"));
+        setDropdownOptions(R.id.aprsDestinationFilterTextView, List.of(
+            getString(R.string.aprs_show_all), getString(R.string.aprs_only_mine)));
     }
 
     private void populateAprsFrequencies() {
@@ -252,6 +275,9 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     private void populateRadioOptions() {
+        setDropdownOptions(R.id.voiceModeTextView,
+            Arrays.asList(getResources().getStringArray(R.array.voice_mode_options)));
+
         AutoCompleteTextView rfPowerTextView = findViewById(R.id.rfPowerTextView);
         rfPowerTextView.setThreshold(1);
         if (hasHighLowPowerSwitch) {
@@ -324,7 +350,13 @@ public class SettingsActivity extends AppCompatActivity {
                 }
                 setDropdownIfPresent(settings, AppSetting.SETTING_APRS_POSITION_ACCURACY, R.id.aprsPositionAccuracyTextView);
                 setDropdownIfPresent(settings, AppSetting.SETTING_APRS_ICON, R.id.aprsIconTextView);
+                this.<AutoCompleteTextView>findViewById(R.id.aprsDestinationFilterTextView).setText(
+                    destinationFilterLabel(
+                        settings.get(AppSetting.SETTING_APRS_DESTINATION_FILTER)), false);
                 setSwitchIfPresent(settings, AppSetting.SETTING_DIGIPEAT_PACKETS, R.id.digipeatPacketsSwitch);
+                setSwitchIfPresent(settings, AppSetting.SETTING_APRS_IGATE, R.id.aprsIgateSwitch);
+                setSwitchIfPresent(settings, AppSetting.SETTING_APRS_IS_DISPLAY,
+                    R.id.aprsIsDisplaySwitch);
                 setRadioSettingsFromIntent();
                 setDropdownIfPresent(settings, AppSetting.SETTING_MIN_2_M_TX_FREQ, R.id.min2mFreqTextView, mhz);
                 setDropdownIfPresent(settings, AppSetting.SETTING_MAX_2_M_TX_FREQ, R.id.max2mFreqTextView, mhz);
@@ -349,14 +381,28 @@ public class SettingsActivity extends AppCompatActivity {
             this.<AutoCompleteTextView>findViewById(R.id.rfPowerTextView)
                 .setText(powerOptions[getIntent().getBooleanExtra(EXTRA_RF_POWER_HIGH, true) ? 0 : Math.min(1, powerOptions.length - 1)], false);
         }
+
+        String[] voiceModeOptions = getResources().getStringArray(R.array.voice_mode_options);
+        if (voiceModeOptions.length > 0) {
+            this.<AutoCompleteTextView>findViewById(R.id.voiceModeTextView)
+                .setText(voiceModeOptions[getIntent().getBooleanExtra(EXTRA_FREEDV_2400B_ENABLED, false)
+                    ? Math.min(1, voiceModeOptions.length - 1) : 0], false);
+        }
     }
 
-    public void closedCaptionsButtonClicked(View view) {
+    private String destinationFilterLabel(String value) {
+        if (value != null && AprsFeedPolicy.DESTINATION_MINE.equalsIgnoreCase(value)) {
+            return getString(R.string.aprs_only_mine);
+        }
+        return getString(R.string.aprs_show_all);
+    }
+
+    public void closedCaptionsButtonClicked(View view) { // NOSONAR S1172: XML onClick signature requires View.
         try {
             startActivity(new Intent("com.android.settings.action.live_caption"));
         } catch (ActivityNotFoundException anfe) {
             CharSequence snackbarMsg = "This phone model doesn't support closed captions";
-            Snackbar ccSnackbar = Snackbar.make(findViewById(R.id.settingsTopLevelView), snackbarMsg, Snackbar.LENGTH_LONG)
+            Snackbar ccSnackbar = Snackbar.make(findViewById(R.id.settingsTopLevelView), snackbarMsg, LENGTH_LONG)
                     .setBackgroundTint(Color.rgb(140, 20, 0)).setActionTextColor(Color.WHITE).setTextColor(Color.WHITE);
 
             // Make the text of the snackbar larger.
@@ -369,10 +415,11 @@ public class SettingsActivity extends AppCompatActivity {
         }
     }
 
-    public void doneButtonClicked(View view) {
+    public void doneButtonClicked(View view) { // NOSONAR S1172: XML onClick signature requires View.
         doneClicked = true;
         Intent data = new Intent()
             .putExtra(EXTRA_RF_POWER_HIGH, isHighPowerSelected())
+            .putExtra(EXTRA_FREEDV_2400B_ENABLED, isFreeDv2400bSelected())
             .putExtra(EXTRA_BANDWIDTH, this.<AutoCompleteTextView>findViewById(R.id.bandwidthTextView).getText().toString().trim())
             .putExtra(EXTRA_SQUELCH, (int) this.<Slider>findViewById(R.id.squelchSlider).getValue())
             .putExtra(EXTRA_FILTER_PRE, this.<Switch>findViewById(R.id.emphasisSwitch).isChecked())
@@ -386,6 +433,12 @@ public class SettingsActivity extends AppCompatActivity {
         String[] powerOptions = getResources().getStringArray(R.array.rf_power_options);
         String selected = this.<AutoCompleteTextView>findViewById(R.id.rfPowerTextView).getText().toString().trim();
         return powerOptions.length == 0 || selected.equals(powerOptions[0]);
+    }
+
+    private boolean isFreeDv2400bSelected() {
+        String[] voiceModeOptions = getResources().getStringArray(R.array.voice_mode_options);
+        String selected = this.<AutoCompleteTextView>findViewById(R.id.voiceModeTextView).getText().toString().trim();
+        return voiceModeOptions.length > 1 && selected.equals(voiceModeOptions[1]);
     }
 
     private void attachTextView(int viewId, Consumer<String> onTextChanged) {
@@ -415,6 +468,7 @@ public class SettingsActivity extends AppCompatActivity {
         attachTextView(R.id.callsignTextInputEditText, text -> setCallsign(text.toUpperCase()));
         attachTextView(R.id.aprsPositionAccuracyTextView, this::setAprsPositionAccuracy);
         attachTextView(R.id.aprsIconTextView, this::setAprsIcon);
+        attachTextView(R.id.aprsDestinationFilterTextView, this::setAprsDestinationFilter);
         attachTextView(R.id.min2mFreqTextView, text -> setMin2mTxFreq(extractPrefix(text)));
         attachTextView(R.id.max2mFreqTextView, text -> setMax2mTxFreq(extractPrefix(text)));
         attachTextView(R.id.min70cmFreqTextView, text -> setMin70cmTxFreq(extractPrefix(text)));
@@ -425,6 +479,8 @@ public class SettingsActivity extends AppCompatActivity {
         attachSwitch(R.id.aprsPositionSwitch, this::setAprsBeaconPosition);
         attachTextView(R.id.aprsBeaconFreqTextView, this::setAprsBeaconFrequency);
         attachSwitch(R.id.digipeatPacketsSwitch, this::setDigipeatPackets);
+        attachSwitch(R.id.aprsIgateSwitch, this::setAprsIgate);
+        attachSwitch(R.id.aprsIsDisplaySwitch, this::setAprsIsDisplay);
     }
 
     private void saveAppSettingAsync(String key, String value) {
@@ -433,6 +489,13 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void setAprsBeaconPosition(boolean enabled) {
         saveAppSettingAsync(AppSetting.SETTING_APRS_BEACON_POSITION, Boolean.toString(enabled));
+        if (enabled && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        if (radioAudioService != null) {
+            radioAudioService.setAprsBeaconPosition(enabled);
+        }
     }
 
     private void setAprsBeaconFrequency(String freq) {
@@ -441,14 +504,44 @@ public class SettingsActivity extends AppCompatActivity {
             frequency = "Current";
         }
         saveAppSettingAsync(AppSetting.SETTING_APRS_BEACON_FREQUENCY, frequency);
+        if (radioAudioService != null) {
+            radioAudioService.setAprsBeaconFrequency(frequency);
+        }
     }
 
     private void setAprsPositionAccuracy(String accuracy) {
         saveAppSettingAsync(AppSetting.SETTING_APRS_POSITION_ACCURACY, accuracy);
+        if (radioAudioService != null) {
+            radioAudioService.setAprsPositionAccuracy(accuracy.equals(getString(R.string.exact))
+                ? RadioAudioService.APRS_POSITION_EXACT
+                : RadioAudioService.APRS_POSITION_APPROX);
+        }
     }
 
     private void setAprsIcon(String icon) {
         saveAppSettingAsync(AppSetting.SETTING_APRS_ICON, icon);
+        if (radioAudioService != null) {
+            radioAudioService.setAprsPositionIcon(getAPRSIconFromSettingChoice(getResources(), icon));
+        }
+    }
+
+    private void setAprsDestinationFilter(String destinationFilter) {
+        String value = getString(R.string.aprs_only_mine).equals(destinationFilter)
+            ? AprsFeedPolicy.DESTINATION_MINE : AprsFeedPolicy.DESTINATION_ALL;
+        saveAppSettingAsync(AppSetting.SETTING_APRS_DESTINATION_FILTER, value);
+        if (radioAudioService != null) {
+            radioAudioService.setAprsDestinationFilter(value);
+        }
+    }
+
+    private void setAprsIgate(boolean enabled) {
+        saveAppSettingAsync(AppSetting.SETTING_APRS_IGATE, Boolean.toString(enabled));
+        if (radioAudioService != null) radioAudioService.setAprsIgateEnabled(enabled);
+    }
+
+    private void setAprsIsDisplay(boolean enabled) {
+        saveAppSettingAsync(AppSetting.SETTING_APRS_IS_DISPLAY, Boolean.toString(enabled));
+        if (radioAudioService != null) radioAudioService.setAprsIsDisplayEnabled(enabled);
     }
 
     private void setMin2mTxFreq(String freq) {
@@ -485,47 +578,19 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void setDigipeatPackets(boolean enabled) {
         saveAppSettingAsync(AppSetting.SETTING_DIGIPEAT_PACKETS, Boolean.toString(enabled));
+        if (radioAudioService != null) {
+            radioAudioService.setDigipeatPackets(enabled);
+        }
     }
 
     public static APRSIconType getAPRSIconFromSettingChoice(Resources resources, String choice) {
-        if (null == choice || choice.trim().isEmpty()) {
-            return APRSIconType.T_PHONE;
+        if (choice != null) {
+            for (int i = 0; i < APRS_ICON_CHOICE_RESOURCES.length; i++) {
+                if (resources.getString(APRS_ICON_CHOICE_RESOURCES[i]).equals(choice)) {
+                    return APRS_ICON_TYPES[i];
+                }
+            }
         }
-
-        if (resources.getString(R.string.aprs_icon_phone).equals(choice)) {
-            return APRSIconType.T_PHONE;
-        } else if (resources.getString(R.string.aprs_icon_person).equals(choice)) {
-            return APRSIconType.T_PERSON;
-        } else if (resources.getString(R.string.aprs_icon_house).equals(choice)) {
-            return APRSIconType.T_HOUSE;
-        } else if (resources.getString(R.string.aprs_icon_bicycle).equals(choice)) {
-            return APRSIconType.T_BICYCLE;
-        } else if (resources.getString(R.string.aprs_icon_car).equals(choice)) {
-            return APRSIconType.T_CAR;
-        } else if (resources.getString(R.string.aprs_icon_jeep).equals(choice)) {
-            return APRSIconType.T_JEEP;
-        } else if (resources.getString(R.string.aprs_icon_truck).equals(choice)) {
-            return APRSIconType.T_TRUCK;
-        } else if (resources.getString(R.string.aprs_icon_motorcycle).equals(choice)) {
-            return APRSIconType.T_MOTORCYCLE;
-        } else if (resources.getString(R.string.aprs_icon_van).equals(choice)) {
-            return APRSIconType.T_VAN;
-        } else if (resources.getString(R.string.aprs_icon_rv).equals(choice)) {
-            return APRSIconType.T_RV;
-        } else if (resources.getString(R.string.aprs_icon_18_wheeler).equals(choice)) {
-            return APRSIconType.T_18_WHEELER;
-        } else if (resources.getString(R.string.aprs_icon_glider).equals(choice)) {
-            return APRSIconType.T_GLIDER;
-        } else if (resources.getString(R.string.aprs_icon_small_aircraft).equals(choice)) {
-            return APRSIconType.T_SMALL_AIRCRAFT;
-        } else if (resources.getString(R.string.aprs_icon_helicopter).equals(choice)) {
-            return APRSIconType.T_HELICOPTER;
-        } else if (resources.getString(R.string.aprs_icon_sailboat).equals(choice)) {
-            return APRSIconType.T_SAILBOAT;
-        } else if (resources.getString(R.string.aprs_icon_motorboat).equals(choice)) {
-            return APRSIconType.T_MOTORBOAT;
-        } else {
-            return APRSIconType.T_PHONE;
-        }
+        return APRSIconType.T_PHONE;
     }
 }

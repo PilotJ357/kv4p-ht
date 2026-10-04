@@ -1,6 +1,6 @@
 /*
 KV4P-HT (see http://kv4p.com)
-Copyright (C) 2025 Vance Vagell
+Copyright (C) 2026 Vance Vagell
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -22,9 +22,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <AudioTools/AudioCodecs/CodecADPCM.h>
 #include <esp_task_wdt.h>
 #include <AfskModulator.h>
+#include <FreeDv2400b.h>
 #include "globals.h"
 #include "protocol.h"
-#include "audioResampler.h"
+#include "state.h"
+#include "utils.h"
+#include "dsp/audioResampler.h"
 
 bool txStreamConfigured = false;
 bool txDecodeStreamStarted = false;
@@ -32,15 +35,43 @@ I2SStream out;
 AudioInfo txInfo(AUDIO_SAMPLE_RATE, 1, 16);
 AudioInfo txAudioInfo(AUDIO_WIRE_SAMPLE_RATE, 1, 16);
 AudioUpsampleOutput txUpsample(out);
+VolumeMeter txVolumeMeter(txUpsample);
 ADPCMDecoder txAdpcmDecoder(AV_CODEC_ID_ADPCM_IMA_WAV, AUDIO_FRAME_BYTES);
-EncodedAudioStream txDecodeStream(&txUpsample, &txAdpcmDecoder);
+EncodedAudioStream txDecodeStream(&txVolumeMeter, &txAdpcmDecoder);
 
 // Tx runaway detection stuff
 uint32_t txStartTime = -1;
 const uint16_t RUNAWAY_TX_SEC = 200;
 
+// A host holding PTT must continuously provide voice frames. This releases PTT
+// quickly if USB, Bluetooth, or BLE disappears without sending PTT-up.
+TxWatchDog txWatchDog;
+
 float txAfskBlock[TX_AFSK_BLOCK_SAMPLES];
 int16_t txAfskPcm[TX_AFSK_BLOCK_SAMPLES];
+
+const float TX_AUDIO_LEVEL_FULL_SCALE_RSSI = 90.0f;
+const float TX_AUDIO_DB_PER_RSSI = 1.2f;
+const float TX_AUDIO_LEVEL_RELEASE = 0.65f;
+
+static float peakHoldTxAudioVolumeRatio(float measuredRatio) {
+  static float heldRatio = 0.0f;
+  if (measuredRatio > heldRatio) {
+    heldRatio = measuredRatio;
+    return measuredRatio;
+  }
+  heldRatio = heldRatio * TX_AUDIO_LEVEL_RELEASE + measuredRatio * (1.0f - TX_AUDIO_LEVEL_RELEASE);
+  return heldRatio;
+}
+
+static void updateTxAudioLevel(float measuredRatio) {
+  float heldRatio = peakHoldTxAudioVolumeRatio(measuredRatio);
+  if (heldRatio <= 0.0f) {
+    txAudioLevel = 0.0f;
+    return;
+  }
+  txAudioLevel = constrain(TX_AUDIO_LEVEL_FULL_SCALE_RSSI + (20.0f * log10f(heldRatio) / TX_AUDIO_DB_PER_RSSI), 0.0f, 255.0f);
+}
 
 static void onAfskTxSamples(const float *samples, size_t count) {
   if (!samples || count == 0 || !txStreamConfigured) {
@@ -61,7 +92,18 @@ static void onAfskTxSamples(const float *samples, size_t count) {
 
 AfskModulator afskMod(AUDIO_SAMPLE_RATE, onAfskTxSamples);
 
+static void onFreeDvTxSamples(const int16_t *samples, size_t count) {
+  if (samples && count && txStreamConfigured) {
+    out.write((const uint8_t *)samples, count * sizeof(int16_t));
+    esp_task_wdt_reset();
+  }
+}
+
+FreeDv2400bModulator freeDvTx(onFreeDvTxSamples);
+int16_t freeDvTxScratch[256];
+
 void initI2STx() {  
+  freeDvTx.setMagnitude(16383);
   auto config = out.defaultConfig(TX_MODE);
   config.copyFrom(txInfo);
   config.pin_data = hw.pins.pinAudioOut;
@@ -71,11 +113,15 @@ void initI2STx() {
   config.signal_type = PDM;
   out.begin(config);
   txUpsample.begin();
+  txVolumeMeter.begin(txAudioInfo);
   if (!txDecodeStreamStarted) {
     txDecodeStream.begin(txAudioInfo);
     txDecodeStreamStarted = true;
   }
   i2s_zero_dma_buffer(I2S_NUM_0);
+  // Start TX meter at full scale to match radio-style TX indication.
+  // Subsequent audio frames update this to the measured TX audio level.
+  updateTxAudioLevel(1.0f);
   txStreamConfigured = true;
 }
 
@@ -85,7 +131,7 @@ void endI2STx() {
     // If left as output, the last PDM bit may hold the line high or low,
     // causing a DC step across the AC-coupling cap and producing a pop.
     // Forcing the pin to high-Z prevents this.
-    pinMode(hw.pins.pinAudioOut, INPUT); 
+    pinMode(hw.pins.pinAudioOut, INPUT);
     // ADPCMDecoder::end() is not safe to re-begin on the pinned adpcm library.
     // Keep the decoder alive across PTT transitions and only stop the hardware output path.
     txUpsample.end();
@@ -98,22 +144,54 @@ void processTxAudio(uint8_t *src, size_t len) {
   if (!src || len == 0 || !txStreamConfigured) {
     return;
   }
+  txWatchDog.onFrame(millis());
   txDecodeStream.write(src, len);
+  updateTxAudioLevel(txVolumeMeter.volumeRatio());
   esp_task_wdt_reset();
 }
 
-void processTxAx25(uint8_t *src, size_t len) {
+void processTxAx25(const uint8_t *src, size_t len, float txDelayMs, float txTailMs) {
   if (!src || len == 0) {
     return;
   }
-  afskMod.modulate(src, len, txAfskBlock, TX_AFSK_BLOCK_SAMPLES, TX_AFSK_LEAD_SILENCE_MS, TX_AFSK_TAIL_SILENCE_MS);
+  // esp32-afsk's public API supplies a fixed flag preamble; its runtime lead
+  // parameter is silence, so TXDELAY is currently carrier lead time, not an
+  // exactly sized flag train.
+  afskMod.modulate(src, len, txAfskBlock, TX_AFSK_BLOCK_SAMPLES, txDelayMs,
+    txTailMs);
+}
+
+void processTxDigital(uint8_t *src, size_t len) {
+  if (!src || len != freedv2400b::PAYLOAD_BYTES || !txStreamConfigured) return;
+  txWatchDog.onFrame(millis());
+  if (!freeDvTx.modulate(src, len, freeDvTxScratch,
+                         sizeof(freeDvTxScratch) / sizeof(freeDvTxScratch[0]))) {
+    _LOGE("Unable to modulate FreeDV 2400B TX frame");
+    return;
+  }
+  updateTxAudioLevel(1.0f);
+}
+
+void releaseHostPtt() {
+  if (desiredState.flags & HOST_STATE_PTT_REQUESTED) {
+    desiredState.flags &= ~HOST_STATE_PTT_REQUESTED;
+    desiredState.sequence++;
+  }
+  setMode(rxIdleMode());
+  markDeviceStateDirty();
 }
 
 void inline txAudioLoop() {
   if (mode == MODE_TX) {
+    if ((desiredState.flags & HOST_STATE_PTT_REQUESTED) && txWatchDog.expired(millis())) {
+      _LOGW("TX audio timeout; releasing host PTT");
+      releaseHostPtt();
+      esp_task_wdt_reset();
+      return;
+    }
     // Check for runaway tx
     if ((millis() - txStartTime) > RUNAWAY_TX_SEC * 1000) {
-      setMode(rxIdleMode());
+      releaseHostPtt();
       esp_task_wdt_reset();
     }
   }

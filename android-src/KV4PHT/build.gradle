@@ -1,7 +1,8 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
-    id 'com.android.application' version '8.12.0' apply false
-    id 'com.android.library' version '8.12.0' apply false
+    id 'com.android.application' version '9.0.1' apply false
+    id 'com.android.library' version '9.0.1' apply false
+    id 'jacoco'
     id "org.sonarqube" version "5.1.0.4882"
 }
 
@@ -11,4 +12,48 @@ sonar {
     property "sonar.organization", "vancevagell"
     property "sonar.host.url", "https://sonarcloud.io"
   }
+}
+
+// Sonar analyzes Android subprojects independently.  The combined report is
+// written by the root project, so make its absolute path available to each
+// subproject that owns source files.
+subprojects {
+    sonar {
+        properties {
+            property "sonar.coverage.jacoco.xmlReportPaths",
+                "${rootProject.buildDir}/reports/jacoco/jacocoTestReport/jacocoTestReport.xml"
+            property "sonar.java.binaries",
+                "${buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes"
+        }
+    }
+}
+
+tasks.register("jacocoTestReport", JacocoReport) {
+    dependsOn(":app:testDebugUnitTest", ":usbSerialForAndroid:testDebugUnitTest")
+
+    reports {
+        xml.required = true
+        html.required = true
+    }
+
+    def excludedClasses = [
+        '**/R.class',
+        '**/R$*.class',
+        '**/BuildConfig.*',
+        '**/Manifest*.*'
+    ]
+    def appProject = project(":app")
+    def usbSerialProject = project(":usbSerialForAndroid")
+    classDirectories.setFrom(files(
+        fileTree(dir: "${appProject.buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes", excludes: excludedClasses),
+        fileTree(dir: "${usbSerialProject.buildDir}/intermediates/javac/debug/compileDebugJavaWithJavac/classes", excludes: excludedClasses)
+    ))
+    sourceDirectories.setFrom(files(
+        "${appProject.projectDir}/src/main/java",
+        "${usbSerialProject.projectDir}/src/main/java"
+    ))
+    executionData.setFrom(files(
+        "${appProject.buildDir}/outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec",
+        "${usbSerialProject.buildDir}/outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec"
+    ))
 }

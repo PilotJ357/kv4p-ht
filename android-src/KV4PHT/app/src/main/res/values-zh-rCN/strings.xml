@@ -3,6 +3,7 @@
     <string name="app_name">kv4p HT</string>
     <string name="second_fragment_label">第二段</string>
     <string name="voice_display">语音</string>
+    <string name="freedv_2400b_display">2400B</string>
     <string name="aprs_chat_display">APRS聊天</string>
     <string name="memory_name_display">频道名称</string>
     <string name="memory_group_optional_display">频道组（可选）</string>
@@ -104,9 +105,23 @@
     <string name="settings">设置</string>
     <string name="beacon_my_position">广播我的位置</string>
     <string name="beacon_to_frequency">信标发射频率</string>
+    <string name="aprs_message_filter">消息筛选</string>
+    <string name="aprs_show_all">显示全部</string>
+    <string name="aprs_only_mine">仅显示我的</string>
+    <string name="aprs_delivery_pending">消息正在等待确认</string>
+    <string name="aprs_delivery_delivered">消息已确认</string>
+    <string name="aprs_delivery_rejected">消息已被拒绝</string>
+    <string name="aprs_delivery_failed">消息发送失败</string>
+    <string name="aprs_digipeated">已转发</string>
+    <string name="aprs_igate_rf_to_is">iGate（将射频消息上报至互联网）</string>
+    <string name="aprs_is_display">显示附近的 APRS-IS 消息</string>
+    <string name="all">全部</string>
+    <string name="mine">我的</string>
     <string name="beaconing_aprs_on">正在频率 %1$s 发送 APRS 信标...</string>
     <string name="current">当前频率</string>
     <string name="done">完成</string>
+    <string name="module_state_squelched">静噪</string>
+    <string name="module_state_tx">发射</string>
     <string name="more_display">更多</string>
     <string name="find_repeaters_menu_item">查找附近的中继台</string>
     <string name="flash_firmware_menu_item">刷写固件</string>
@@ -119,10 +134,17 @@
         <item>High</item>
         <item>Low</item>
     </string-array>
+    <string name="voice_mode">Voice mode</string>
+    <string-array name="voice_mode_options">
+        <item>Analog</item>
+        <item>FreeDV 2400B</item>
+    </string-array>
     <string name="mhz">MHz</string>
     <string name="app_version">应用版本</string>
     <string name="firmware_version">固件版本</string>
     <string name="flash_firmware_title">刷写固件？</string>
     <string name="flash_firmware_message">这将替换您 kv4p HT 上的固件。</string>
     <string name="flash_firmware_button">刷写</string>
+    <string name="firmware_flash_requires_usb">请通过 USB 连接电台以刷写固件</string>
+    <string name="aprs_message_not_accepted">APRS 消息未被接受发送。</string>
 </resources>

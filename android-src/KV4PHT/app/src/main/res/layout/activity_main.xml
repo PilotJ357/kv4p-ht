@@ -35,31 +35,6 @@
         </androidx.appcompat.widget.LinearLayoutCompat>
 
         <androidx.appcompat.widget.LinearLayoutCompat
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:gravity="bottom">
-
-            <androidx.appcompat.widget.LinearLayoutCompat
-                android:layout_width="match_parent"
-                android:layout_height="200dp"
-                android:orientation="vertical"
-                android:gravity="center">
-
-                <ImageView
-                    android:id="@+id/txAudioCircle"
-                    android:contentDescription="@string/visualization_of_current_transmit_audio_volume"
-                    android:layout_height="0dp"
-                    android:layout_width="0dp"
-                    android:src="@drawable/circle_tx"
-                    android:focusable="false"
-                    android:importantForAccessibility="no"/>
-
-            </androidx.appcompat.widget.LinearLayoutCompat>
-
-        </androidx.appcompat.widget.LinearLayoutCompat>
-
-        <androidx.appcompat.widget.LinearLayoutCompat
             android:id="@+id/mainTopLevelLayout"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -122,27 +97,26 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent">
 
-                    <EditText
+                    <TextView
                         android:id="@+id/activeBand"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginEnd="32dp"
                         android:background="@color/clear"
-                        android:cursorVisible="false"
                         android:focusable="false"
                         android:focusableInTouchMode="false"
-                        android:gravity="end"
-                        android:inputType="none"
+                        android:gravity="end|bottom"
+                        android:includeFontPadding="false"
                         android:longClickable="false"
                         android:text="@string/vhf"
                         android:textColor="@color/band"
                         android:textIsSelectable="false"
                         android:textSize="14sp"
                         android:textStyle="bold"
+                        android:translationY="2dp"
                         android:visibility="invisible"
                         app:layout_constraintBottom_toBottomOf="parent"
                         app:layout_constraintEnd_toEndOf="parent"
-                        app:layout_constraintTop_toTopOf="parent"
                         tools:visibility="visible" />
 
                     <LinearLayout
@@ -151,83 +125,128 @@
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
                         android:gravity="bottom"
-                        android:paddingTop="4dp"
-                        app:layout_constraintTop_toTopOf="parent"
                         app:layout_constraintBottom_toBottomOf="parent"
                         app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintEnd_toEndOf="parent">
 
                         <View
                             android:id="@+id/sMeter1"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="2dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter2"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="3dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter3"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="4dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter4"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="5dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter5"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="6dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter6"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="7dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter7"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="8dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter8"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="9dp"
-                            android:layout_marginEnd="6dp"
+                            android:layout_marginEnd="2dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
 
                         <View
                             android:id="@+id/sMeter9"
-                            android:layout_width="12dp"
+                            android:layout_width="6dp"
                             android:layout_height="10dp"
+                            android:layout_marginEnd="2dp"
+                            android:background="@color/primary"
+                            android:alpha="0.2" />
+
+                        <View
+                            android:id="@+id/sMeter10"
+                            android:layout_width="6dp"
+                            android:layout_height="11dp"
+                            android:layout_marginEnd="2dp"
+                            android:background="@color/primary"
+                            android:alpha="0.2" />
+
+                        <View
+                            android:id="@+id/sMeter11"
+                            android:layout_width="6dp"
+                            android:layout_height="12dp"
+                            android:layout_marginEnd="2dp"
+                            android:background="@color/primary"
+                            android:alpha="0.2" />
+
+                        <View
+                            android:id="@+id/sMeter12"
+                            android:layout_width="6dp"
+                            android:layout_height="13dp"
+                            android:layout_marginEnd="2dp"
+                            android:background="@color/primary"
+                            android:alpha="0.2" />
+
+                        <View
+                            android:id="@+id/sMeter13"
+                            android:layout_width="6dp"
+                            android:layout_height="14dp"
                             android:background="@color/primary"
                             android:alpha="0.2" />
                     </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/moduleStateLabel"
+                        android:layout_width="48dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="32dp"
+                        android:gravity="start|bottom"
+                        android:includeFontPadding="false"
+                        android:text=""
+                        android:textColor="@color/primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:translationY="2dp"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintStart_toStartOf="parent" />
                 </androidx.constraintlayout.widget.ConstraintLayout>
 
                 <androidx.appcompat.widget.LinearLayoutCompat
@@ -342,7 +361,7 @@
             <androidx.appcompat.widget.LinearLayoutCompat
                 android:id="@+id/textModeContainer"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="0dp"
                 android:layout_weight="1"
                 android:orientation="vertical"
                 android:background="@drawable/rounded_corners"
@@ -358,7 +377,7 @@
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/aprsRecyclerView"
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
+                    android:layout_height="0dp"
                     android:orientation="vertical"
                     android:layout_weight="1">
 
