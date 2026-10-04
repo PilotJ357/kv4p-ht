@@ -63,6 +63,8 @@ struct CaptionLine: Identifiable {
     var time: String
     var text: String
     var active: Bool = false
+    // SpeechManager segment feeding this line; nil for non-speech lines.
+    var segmentID: Int? = nil
 }
 
 // MARK: - Radio Store
@@ -191,6 +193,11 @@ class RadioStore {
     // No audio reaches the recognizer in background (sample hook removed).
     @ObservationIgnored private var captionsSuspended = false
     private static let captionRetryDelay: Duration = .seconds(2)
+    // Captions keep the segment open this long after squelch closes, so a
+    // flickering squelch flag doesn't split sentences (see SquelchHangGate).
+    @ObservationIgnored private var squelchGate = SquelchHangGate(hangTime: 1.5)
+    @ObservationIgnored private var squelchCloseTask: Task<Void, Never>?
+    @ObservationIgnored private var lastSquelchFlagChange: Date?
 
     // ── Settings
     var callsign: String = "" {
@@ -424,16 +431,16 @@ class RadioStore {
     private func configureSpeechManager() {
         speechManager.configure(language: captionLanguage)
 
-        speechManager.onPartialResult = { [weak self] text in
+        speechManager.onPartialResult = { [weak self] segmentID, text in
             guard let self else { return }
-            if let idx = self.captionLines.lastIndex(where: { $0.active }) {
+            if let idx = self.captionLines.lastIndex(where: { $0.segmentID == segmentID }) {
                 self.captionLines[idx].text = text
             }
         }
 
-        speechManager.onSegmentFinalized = { [weak self] in
+        speechManager.onSegmentFinalized = { [weak self] segmentID in
             guard let self else { return }
-            for i in self.captionLines.indices where self.captionLines[i].active {
+            for i in self.captionLines.indices where self.captionLines[i].segmentID == segmentID {
                 self.captionLines[i].active = false
             }
             self.captionLines.removeAll { $0.text.isEmpty && !$0.active }
@@ -442,15 +449,16 @@ class RadioStore {
             }
         }
 
-        speechManager.onRollingRestart = { [weak self] in
-            self?.appendNewCaptionLine()
+        speechManager.onRollingRestart = { [weak self] segmentID in
+            self?.appendNewCaptionLine(segmentID: segmentID)
         }
 
-        // The recognizer gave up (final result, error, model not ready)
-        // while a continuous signal may still hold squelch open; no
-        // squelch transition will come, so retry on our own.
-        speechManager.onSegmentEnded = { [weak self] in
-            self?.scheduleCaptionRetry()
+        // The recognizer ended the segment (final result after a pause,
+        // error, model not ready) while a continuous signal may still hold
+        // squelch open; no squelch transition will come, so restart on our
+        // own: at once after a normal finish, after a delay on failure.
+        speechManager.onSegmentEnded = { [weak self] ending in
+            self?.scheduleCaptionRetry(after: ending)
         }
 
         refreshCaptionsStatus()
@@ -488,18 +496,26 @@ class RadioStore {
         guard captionsStatus == .listening, !captionsSuspended, !isSquelched,
               !speechManager.isSegmentActive else { return }
         captionRetryTask?.cancel()
-        if speechManager.startSegment() {
-            appendNewCaptionLine()
+        if let segmentID = speechManager.startSegment() {
+            // Segments can start outside a squelch transition (foreground,
+            // permission granted); make sure the gate knows we're open.
+            _ = squelchGate.update(squelched: false, now: Date())
+            appendNewCaptionLine(segmentID: segmentID)
         } else {
-            scheduleCaptionRetry()
+            scheduleCaptionRetry(after: .startFailed)
         }
     }
 
-    private func scheduleCaptionRetry() {
+    private func scheduleCaptionRetry(after ending: CaptionRestartPolicy.Ending) {
         captionRetryTask?.cancel()
         guard captionsStatus == .listening, !captionsSuspended, !isSquelched else { return }
+        let delay = CaptionRestartPolicy.delay(after: ending, retryDelay: Self.captionRetryDelay)
+        if delay == .zero {
+            startCaptionsIfReceiving()
+            return
+        }
         captionRetryTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.captionRetryDelay)
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.startCaptionsIfReceiving()
         }
@@ -508,10 +524,13 @@ class RadioStore {
     private func stopCaptions() {
         captionRetryTask?.cancel()
         captionRetryTask = nil
+        squelchCloseTask?.cancel()
+        squelchCloseTask = nil
+        squelchGate.reset()
         speechManager.endSegment()
     }
 
-    private func appendNewCaptionLine() {
+    private func appendNewCaptionLine(segmentID: Int) {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         formatter.dateStyle = .none
@@ -519,7 +538,8 @@ class RadioStore {
             callsign: "RX",
             time: formatter.string(from: Date()),
             text: "",
-            active: true
+            active: true,
+            segmentID: segmentID
         ))
     }
 
@@ -644,13 +664,37 @@ class RadioStore {
     }
 
     func checkSquelchTransition() {
-        // Level-based so it stays correct after segments started outside a
-        // transition (foreground, permission granted); both calls are no-ops
-        // when already in the right state.
-        if isSquelched {
-            stopCaptions()
-        } else {
+        let now = Date()
+        let squelched = isSquelched
+        let action = squelchGate.update(squelched: squelched, now: now)
+        // Diagnostic: a short open/closed interval here means the firmware
+        // squelch flag is flapping.
+        let sinceLast = lastSquelchFlagChange.map { String(format: "%.0f ms", now.timeIntervalSince($0) * 1000) } ?? "n/a"
+        lastSquelchFlagChange = now
+        print("[Captions] squelch flag \(squelched ? "closed" : "open") after \(sinceLast) -> \(action) (flaps absorbed: \(squelchGate.absorbedFlaps))")
+
+        switch action {
+        case .scheduleClose(let after):
+            squelchCloseTask?.cancel()
+            squelchCloseTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(after))
+                guard !Task.isCancelled, let self,
+                      self.squelchGate.closeTimerFired(now: Date()) else { return }
+                self.stopCaptions()
+            }
+        case .cancelClose:
+            squelchCloseTask?.cancel()
+            squelchCloseTask = nil
+            // The recognizer may have ended the segment during the hang.
             startCaptionsIfReceiving()
+        case .open, .none:
+            // Level-based so it stays correct after segments started
+            // outside a transition; no-ops when already in the right state.
+            if !squelched {
+                startCaptionsIfReceiving()
+            } else if !squelchGate.isHanging {
+                stopCaptions()
+            }
         }
     }
 

@@ -7,8 +7,15 @@ class SpeechManager {
     private var currentRequest: SFSpeechAudioBufferRecognitionRequest?
     private var currentTask: SFSpeechRecognitionTask?
     private var segmentTimer: Timer?
-    private var isRecognizing = false
+    // Segment currently accepting audio, if any.
+    private var liveSegmentID: Int?
     private var segmentGeneration = 0
+    // Segments whose audio has ended but whose final result hasn't arrived;
+    // the timeout cancels a task that never reports back.
+    private var drainingSegments: [Int: (task: SFSpeechRecognitionTask, timeout: Task<Void, Never>)] = [:]
+    // Per-segment caption text, kept across the recognizer's restarts
+    // after pauses (see TranscriptAccumulator).
+    private var transcripts: [Int: TranscriptAccumulator] = [:]
     // Thread-safe reference for feeding samples from BLE queue
     nonisolated(unsafe) private var activeRequest: SFSpeechAudioBufferRecognitionRequest?
 
@@ -20,6 +27,7 @@ class SpeechManager {
     )!
 
     private static let rollingRestartSeconds: TimeInterval = 55
+    private static let drainTimeout: Duration = .seconds(5)
     private static let hamVocab = [
         "CQ", "QSO", "QTH", "QSL", "QRZ", "QRM", "QRN", "QRP", "QRO",
         "73", "88", "roger", "copy", "over", "out", "break", "breaker",
@@ -32,12 +40,17 @@ class SpeechManager {
         "ham", "amateur", "frequency", "megahertz", "kilohertz"
     ]
 
-    var onPartialResult: ((String) -> Void)?
-    var onSegmentFinalized: (() -> Void)?
-    var onRollingRestart: (() -> Void)?
-    // The recognizer ended a segment on its own (final result or error),
-    // not via endSegment()/rollingRestart().
-    var onSegmentEnded: (() -> Void)?
+    // All callbacks carry the segment ID returned by startSegment(), so
+    // results that arrive after a newer segment started still land on
+    // their own caption line.
+    var onPartialResult: ((Int, String) -> Void)?
+    // The segment produced its last result (or was abandoned).
+    var onSegmentFinalized: ((Int) -> Void)?
+    // A rolling restart started this new segment.
+    var onRollingRestart: ((Int) -> Void)?
+    // The live segment ended on its own (final result or error), not via
+    // endSegment()/rollingRestart().
+    var onSegmentEnded: ((CaptionRestartPolicy.Ending) -> Void)?
 
     func configure(language: String) {
         let localeId = Self.mapLanguage(language)
@@ -56,7 +69,7 @@ class SpeechManager {
         SFSpeechRecognizer.authorizationStatus()
     }
 
-    var isSegmentActive: Bool { isRecognizing }
+    var isSegmentActive: Bool { liveSegmentID != nil }
 
     // Captions are on-device only: without local support SFSpeechRecognizer
     // would stream received audio to Apple's servers, so we don't run at all.
@@ -64,13 +77,13 @@ class SpeechManager {
         recognizer?.supportsOnDeviceRecognition ?? false
     }
 
-    // Returns false when the recognizer can't start right now (not
-    // authorized, unavailable, or on-device model not ready).
+    // Returns the new segment's ID, or nil when the recognizer can't start
+    // right now (not authorized, unavailable, or on-device model not ready).
     @discardableResult
-    func startSegment() -> Bool {
+    func startSegment() -> Int? {
         guard authorizationStatus == .authorized,
               let recognizer, recognizer.isAvailable,
-              recognizer.supportsOnDeviceRecognition else { return false }
+              recognizer.supportsOnDeviceRecognition else { return nil }
         endSegment()
 
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -84,26 +97,29 @@ class SpeechManager {
         segmentGeneration += 1
         let segmentID = segmentGeneration
         currentTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            if let result {
-                let text = result.bestTranscription.formattedString
-                Task { @MainActor in
-                    guard segmentID == self.segmentGeneration else { return }
-                    self.onPartialResult?(text)
+            let text = result?.bestTranscription.formattedString
+            let firstWordStart = result?.bestTranscription.segments.first?.timestamp
+            let isFinal = result?.isFinal ?? false
+            let failed = result == nil && error != nil
+            Task { @MainActor in
+                guard let self, self.isTracked(segmentID) else { return }
+                if let text {
+                    var transcript = self.transcripts[segmentID] ?? TranscriptAccumulator()
+                    let display = isFinal
+                        ? transcript.final(text)
+                        : transcript.partial(text, firstWordStart: firstWordStart)
+                    self.transcripts[segmentID] = transcript
+                    self.onPartialResult?(segmentID, display)
                 }
-                if result.isFinal {
-                    Task { @MainActor in
-                        self.finalizeCurrentSegment(segmentID)
-                    }
-                }
-            } else if error != nil {
-                Task { @MainActor in
-                    self.finalizeCurrentSegment(segmentID)
+                if isFinal {
+                    self.segmentDidEnd(segmentID, .finished)
+                } else if failed {
+                    self.segmentDidEnd(segmentID, .failed)
                 }
             }
         }
 
-        isRecognizing = true
+        liveSegmentID = segmentID
 
         segmentTimer?.invalidate()
         segmentTimer = Timer.scheduledTimer(
@@ -114,7 +130,7 @@ class SpeechManager {
                 self?.rollingRestart()
             }
         }
-        return true
+        return segmentID
     }
 
     nonisolated func feedSamples(_ samples: [Float], count: Int) {
@@ -130,53 +146,67 @@ class SpeechManager {
         activeRequest?.append(pcmBuffer)
     }
 
+    // Stops feeding the live segment and lets the recognizer finish the
+    // audio it already has. Cancelling here would discard that buffered
+    // tail, losing the end of every transmission.
     func endSegment() {
         segmentTimer?.invalidate()
         segmentTimer = nil
         activeRequest = nil
-        guard isRecognizing else { return }
+        guard let segmentID = liveSegmentID, let task = currentTask else {
+            liveSegmentID = nil
+            return
+        }
         currentRequest?.endAudio()
+        task.finish()
         currentRequest = nil
-        currentTask?.cancel()
         currentTask = nil
-        isRecognizing = false
-        onSegmentFinalized?()
+        liveSegmentID = nil
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: Self.drainTimeout)
+            guard !Task.isCancelled, let self,
+                  let draining = self.drainingSegments.removeValue(forKey: segmentID) else { return }
+            draining.task.cancel()
+            self.transcripts[segmentID] = nil
+            self.onSegmentFinalized?(segmentID)
+        }
+        drainingSegments[segmentID] = (task, timeout)
     }
 
     func stopAll() {
-        activeRequest = nil
         endSegment()
         recognizer = nil
     }
 
     private func rollingRestart() {
-        guard isRecognizing else { return }
-        activeRequest = nil
-        currentRequest?.endAudio()
-        currentRequest = nil
-        currentTask?.cancel()
-        currentTask = nil
-        isRecognizing = false
-        onSegmentFinalized?()
-        if startSegment() {
-            onRollingRestart?()
+        guard liveSegmentID != nil else { return }
+        endSegment()
+        if let segmentID = startSegment() {
+            onRollingRestart?(segmentID)
         } else {
-            onSegmentEnded?()
+            onSegmentEnded?(.startFailed)
         }
     }
 
-    private func finalizeCurrentSegment(_ segmentID: Int) {
-        // A cancelled task reports its error after a newer segment may have
-        // started; only the current segment's task may end it.
-        guard isRecognizing, segmentID == segmentGeneration else { return }
-        segmentTimer?.invalidate()
-        segmentTimer = nil
-        activeRequest = nil
-        currentRequest = nil
-        currentTask = nil
-        isRecognizing = false
-        onSegmentFinalized?()
-        onSegmentEnded?()
+    private func isTracked(_ segmentID: Int) -> Bool {
+        segmentID == liveSegmentID || drainingSegments[segmentID] != nil
+    }
+
+    private func segmentDidEnd(_ segmentID: Int, _ ending: CaptionRestartPolicy.Ending) {
+        transcripts[segmentID] = nil
+        if segmentID == liveSegmentID {
+            segmentTimer?.invalidate()
+            segmentTimer = nil
+            activeRequest = nil
+            currentRequest = nil
+            currentTask = nil
+            liveSegmentID = nil
+            onSegmentFinalized?(segmentID)
+            onSegmentEnded?(ending)
+        } else if let draining = drainingSegments.removeValue(forKey: segmentID) {
+            draining.timeout.cancel()
+            onSegmentFinalized?(segmentID)
+        }
     }
 
     private static func mapLanguage(_ language: String) -> String {
