@@ -107,6 +107,10 @@ class RadioStore {
     // from firmware-applied state on connect and from memory tunes.
     var vfoOffset: Float = 0       // MHz, 0 = simplex
     var vfoToneIndex: UInt8 = 0    // CTCSS index, 0 = off
+    // Set while a beacon is out on its own simplex frequency: the applied
+    // state then describes that channel, not the VFO, so it must not
+    // overwrite vfoOffset/vfoToneIndex before the restore (#56).
+    @ObservationIgnored private var isSimplexFrequencySwitchActive = false
     var captionsEnabled: Bool = false
     var isScanning: Bool = false
     var scanIndex: Int = 0
@@ -426,8 +430,30 @@ class RadioStore {
         // the AFSK/squelch taps, so they only shape voice audio.
         filterHighPass = (ds.flags & HOST_STATE_FILTER_LOW) != 0
         filterLowPass = (ds.flags & HOST_STATE_FILTER_HIGH) != 0
-        vfoOffset = ds.freqTx - ds.freqRx
-        vfoToneIndex = ds.ctcssTx
+        if let vfo = Self.appliedVfoConfig(ds, simplexSwitchActive: isSimplexFrequencySwitchActive) {
+            vfoOffset = vfo.offset
+            vfoToneIndex = vfo.toneIndex
+        }
+    }
+
+    // VFO offset/tone implied by an applied state, or nil when it belongs
+    // to a temporary simplex frequency switch and must be ignored.
+    nonisolated static func appliedVfoConfig(
+        _ ds: DeviceStateFrame, simplexSwitchActive: Bool
+    ) -> (offset: Float, toneIndex: UInt8)? {
+        guard !simplexSwitchActive else { return nil }
+        return (ds.freqTx - ds.freqRx, ds.ctcssTx)
+    }
+
+    // Retunes simplex (no offset/tone) to `freq` for `body`, then restores
+    // the original VFO channel with its offset and tone intact.
+    func withSimplexFrequency(_ freq: Float, _ body: () async -> Void) async {
+        let originalFreq = currentFreq
+        isSimplexFrequencySwitchActive = true
+        sendRadioState(freq: freq, simplexOverride: true)
+        await body()
+        isSimplexFrequencySwitchActive = false
+        sendRadioState(freq: originalFreq)
     }
 
     private func configureSpeechManager() {
