@@ -113,6 +113,7 @@ struct SettingsView: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
+    var backLabel = "More"  // tab the sheet was opened from
     @State private var showAprsSquelchInfo = false
     @State private var showOnDeviceUnavailable = false
 
@@ -254,7 +255,7 @@ struct SettingsView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 16, weight: .semibold))
-                        Text("More")
+                        Text(backLabel)
                             .font(.system(size: 17))
                     }
                 }
