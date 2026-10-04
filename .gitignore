@@ -10,3 +10,4 @@ backups/
 .DS_Store
 xcuserdata/
 *.xcuserstate
+battery-testing/

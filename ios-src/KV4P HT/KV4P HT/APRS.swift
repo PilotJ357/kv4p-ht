@@ -3,8 +3,8 @@ import Foundation
 // APRS payload (information field) parsing and building, ported from the
 // Android app's parser package (Parser.parseBody, PositionParser,
 // MessagePacket, ObjectField, WeatherParser, Position.toCompressedString).
-// Scope: position, message/ack, object, weather. MIC-E, NMEA, telemetry and
-// third-party packets fall through to .raw.
+// Scope: position, message/ack, object, weather, Mic-E. NMEA, telemetry and
+// unrecognized packets fall through to .raw.
 
 struct APRSWeather: Codable, Equatable {
     var temperatureF: Int?
@@ -172,6 +172,114 @@ private func parseDegMin(_ buf: [Character], cursor: Int, degSize: Int) -> Doubl
     if degSize == 2 && result > 90.01 { return nil }
     if degSize == 3 && result > 180.01 { return nil }
     return (result * 100000).rounded() / 100000
+}
+
+// MARK: - Mic-E
+
+// Mic-E: DTI is `\`` (current), `'` (old), or 0x1c/0x1d (current/old, custom
+// message bits). Position is encoded in the AX.25 destination callsign;
+// longitude/speed/course/symbol are encoded in the info field bytes that
+// follow the DTI. Ported from Android PositionParser.java.
+private func micEBitOne(_ c: Character) -> Bool {
+    ("A"..."K").contains(c) || ("P"..."Y").contains(c)
+}
+
+func parseMicEPayload(_ info: Data, destCall: String) -> APRSInfo? {
+    let bytes = Array(info)
+    guard let dti = bytes.first,
+          dti == 0x60 || dti == 0x27 || dti == 0x1c || dti == 0x1d,
+          bytes.count >= 9 else { return nil }
+
+    let base = destCall.split(separator: "-").first.map(String.init) ?? destCall
+    let dest = Array(base.uppercased())
+    guard dest.count == 6 else { return nil }
+
+    // Destination callsign → lat digits + ambiguity. A-J/P-Y map to 0-9,
+    // K/L/Z mark an ambiguous digit (replaced below).
+    var digits = [Int](repeating: 0, count: 6)
+    for i in 0..<6 {
+        let c = dest[i]
+        if let a = c.asciiValue {
+            switch c {
+            case "A"..."J": digits[i] = Int(a - Character("A").asciiValue!)
+            case "P"..."Y": digits[i] = Int(a - Character("P").asciiValue!)
+            case "K", "L", "Z": digits[i] = -1
+            case "0"..."9": digits[i] = c.wholeNumberValue!
+            default: return nil
+            }
+        } else {
+            return nil
+        }
+    }
+    guard digits[0] >= 0 && digits[1] >= 0 else { return nil }
+
+    var ambiguity = 0
+    if digits[5] == -1 { digits[5] = 5; ambiguity = 4 }
+    else if digits[4] == -1 { digits[4] = 5; digits[5] = 0; ambiguity = 3 }
+    else if digits[3] == -1 { digits[3] = 5; digits[4] = 0; digits[5] = 0; ambiguity = 2 }
+    else if digits[2] == -1 { digits[2] = 3; digits[3] = 0; digits[4] = 0; digits[5] = 0; ambiguity = 1 }
+    guard digits.allSatisfy({ $0 >= 0 }) else { return nil }
+
+    let latDeg = Double(digits[0] * 10 + digits[1])
+    let latMin = Double(digits[2] * 10 + digits[3]) + Double(digits[4]) / 10.0 + Double(digits[5]) / 100.0
+    var lat = latDeg + latMin / 60.0
+    if !micEBitOne(dest[3]) { lat = -lat }
+
+    let lonOffset100 = micEBitOne(dest[4])
+    let isWest = micEBitOne(dest[5])
+
+    // Info field bytes after DTI: 6 position-extension bytes, symbol code,
+    // symbol table, then the message/comment text.
+    var lonDeg = Int(bytes[1]) - 28
+    if lonOffset100 { lonDeg += 100 }
+    if lonDeg >= 180 && lonDeg <= 189 { lonDeg -= 80 }
+    else if lonDeg >= 190 && lonDeg <= 199 { lonDeg -= 190 }
+
+    var lonMin = Int(bytes[2]) - 28
+    if lonMin >= 60 { lonMin -= 60 }
+    let lonFrac = Int(bytes[3]) - 28
+
+    var lon: Double
+    switch ambiguity {
+    case 1: lon = Double(lonDeg) + Double(lonMin) / 60.0 + Double(lonFrac - lonFrac % 10 + 5) / 6000.0
+    case 2: lon = Double(lonDeg) + Double(lonMin) / 60.0
+    case 3: lon = Double(lonDeg) + Double(lonMin - lonMin % 10 + 5) / 60.0
+    case 4: lon = Double(lonDeg) + 0.5
+    default: lon = Double(lonDeg) + Double(lonMin) / 60.0 + Double(lonFrac) / 6000.0
+    }
+    if isWest { lon = -lon }
+
+    let sp = Int(bytes[4]) - 28
+    let dc = Int(bytes[5]) - 28
+    let se = Int(bytes[6]) - 28
+    var speed = sp * 10 + dc / 10
+    var course = (dc % 10) * 100 + se
+    if course >= 400 { course -= 400 }
+    if speed >= 800 { speed -= 800 }
+
+    let symbolCode = Character(UnicodeScalar(bytes[7]))
+    let symbolTable = Character(UnicodeScalar(bytes[8]))
+
+    var tail = bytes.dropFirst(9)
+    // Strip optional Mic-E type indicator byte (Kenwood/Yaesu device codes)
+    if let first = tail.first,
+       first == 0x60 || first == 0x27 || first == 0x1c || first == 0x1d ||
+       first == UInt8(ascii: ">") || first == UInt8(ascii: "]") {
+        tail = tail.dropFirst()
+    }
+    // Strip optional altitude encoding: 3 printable bytes followed by '}'
+    if tail.count >= 4 && tail[tail.startIndex + 3] == UInt8(ascii: "}") {
+        tail = tail.dropFirst(4)
+    }
+    var comment = String(decoding: tail, as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if speed > 0 || course > 0 {
+        let extra = "crs=\(course) spd=\(speed)kt"
+        comment = comment.isEmpty ? extra : "\(comment) \(extra)"
+    }
+
+    return .position(lat: lat, lon: lon, symbolTable: symbolTable, symbolCode: symbolCode,
+                     comment: comment, weather: nil)
 }
 
 // MARK: - Message
