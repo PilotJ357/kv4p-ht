@@ -1,6 +1,6 @@
 /*
 KV4P-HT (see http://kv4p.com)
-Copyright (C) 2025 Vance Vagell
+Copyright (C) 2026 Vance Vagell
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -31,6 +31,9 @@ static constexpr uint8_t KISS_FESC = 0xDB;
 static constexpr uint8_t KISS_TFEND = 0xDC;
 static constexpr uint8_t KISS_TFESC = 0xDD;
 static constexpr uint8_t KISS_CMD_DATA = 0x00;
+static constexpr uint8_t KISS_CMD_TXDELAY = 0x01;
+static constexpr uint8_t KISS_CMD_PERSIST = 0x02;
+static constexpr uint8_t KISS_CMD_SLOTTIME = 0x03;
 static constexpr uint8_t KISS_CMD_SETHARDWARE = 0x06;
 static constexpr uint8_t KISS_PORT_0 = 0x00;
 static constexpr uint8_t KV4P_PROTOCOL_VERSION = 0x01;
@@ -43,6 +46,8 @@ enum RcvCommand {
   COMMAND_RCV_UNKNOWN    = 0x00,
   COMMAND_HOST_TX_AUDIO  = 0x0C, // [COMMAND_HOST_TX_AUDIO(uint8_t[])]
   COMMAND_HOST_DESIRED_STATE = 0x0D, // [COMMAND_HOST_DESIRED_STATE(HostDesiredState)]
+  COMMAND_HOST_TX_DIGITAL = 0x0E, // [COMMAND_HOST_TX_DIGITAL(7-byte Codec2 1300 frame)]
+  COMMAND_HOST_TX_AX25 = 0x0F, // [float freqTx, uint8 bw, uint8 ctcssTx, AX.25 bytes]
 };
 
 // Outgoing commands (ESP32 -> Android)
@@ -57,6 +62,7 @@ enum SndCommand {
   COMMAND_RX_AUDIO       = 0x0C, // [COMMAND_RX_AUDIO(int8_t[])]
   COMMAND_WINDOW_UPDATE  = 0x09,
   COMMAND_DEVICE_STATE   = 0x0B, // [COMMAND_DEVICE_STATE(DeviceState)]
+  COMMAND_RX_DIGITAL     = 0x0E, // [COMMAND_RX_DIGITAL(7-byte Codec2 1300 frame)]
 };
 
 // COMMAND_HELLO parameters: Version + initial DeviceState
@@ -73,6 +79,7 @@ REQUIRE_TRIVIALLY_COPYABLE(Version);
 #define FEATURE_HAS_HL      (1 << 0)
 #define FEATURE_HAS_PHY_PTT (1 << 1)
 #define FEATURE_HAS_ESP32_AFSK (1 << 2)
+#define FEATURE_HAS_FREEDV_2400B (1 << 3)
 
 #define HOST_STATE_RADIO_CONFIG_VALID (1 << 0)
 #define HOST_STATE_PTT_REQUESTED      (1 << 1)
@@ -84,6 +91,7 @@ REQUIRE_TRIVIALLY_COPYABLE(Version);
 #define HOST_STATE_FILTER_LOW         (1 << 7)
 #define HOST_STATE_TX_ALLOWED         (1 << 11)
 #define HOST_STATE_ENABLE_STATUS_REPORTS (1 << 12)
+#define HOST_STATE_FREEDV_2400B       (1 << 13)
 
 #define DEVICE_STATE_RADIO_CONFIG_VALID HOST_STATE_RADIO_CONFIG_VALID
 #define DEVICE_STATE_PTT_REQUESTED      HOST_STATE_PTT_REQUESTED
@@ -111,7 +119,8 @@ static constexpr uint16_t HOST_STATE_GLOBAL_FLAG_MASK =
   | HOST_STATE_FILTER_PRE
   | HOST_STATE_FILTER_HIGH
   | HOST_STATE_FILTER_LOW
-  | HOST_STATE_TX_ALLOWED;
+  | HOST_STATE_TX_ALLOWED
+  | HOST_STATE_FREEDV_2400B;
 
 struct ProtocolSession {
   Stream *stream;
@@ -279,8 +288,8 @@ void inline sendKissDataFrame(Stream &out, const uint8_t *ax25, size_t len) {
   if (ax25 == NULL) {
     len = 0;
   }
-  if (len > PROTO_MTU) {
-    len = PROTO_MTU;
+  if (len > AX25_MAX_KISS_DATA_LEN) {
+    len = AX25_MAX_KISS_DATA_LEN;
   }
   sendKissFrame(out, KISS_CMD_DATA, ax25, len);
 }
@@ -360,6 +369,7 @@ void inline sendDeviceState(const DeviceState &state) {
 }
 
 void inline sendAudio(const uint8_t *data, size_t len) {
+  if (freeDv2400bEnabled()) return;
   if (protocolSessionConnected(protocolUsbSession) && (protocolUsbSession.flags & HOST_STATE_RX_AUDIO_OPEN)) {
     sendKv4pVendorFrame(*protocolUsbSession.stream, COMMAND_RX_AUDIO, data, len);
   }
@@ -368,6 +378,19 @@ void inline sendAudio(const uint8_t *data, size_t len) {
   }
   if (protocolHasBleSession() && (protocolBleSession.flags & HOST_STATE_RX_AUDIO_OPEN)) {
     sendKv4pVendorFrame(*protocolBleSession.stream, COMMAND_RX_AUDIO, data, len);
+  }
+}
+
+void inline sendDigitalFrame(const uint8_t *data, size_t len) {
+  if (!freeDv2400bEnabled() || len != 7) return;
+  if (protocolSessionConnected(protocolUsbSession) && (protocolUsbSession.flags & HOST_STATE_RX_AUDIO_OPEN)) {
+    sendKv4pVendorFrame(*protocolUsbSession.stream, COMMAND_RX_DIGITAL, data, len);
+  }
+  if (protocolHasBtSession() && (protocolBtSession.flags & HOST_STATE_RX_AUDIO_OPEN)) {
+    sendKv4pVendorFrame(*protocolBtSession.stream, COMMAND_RX_DIGITAL, data, len);
+  }
+  if (protocolHasBleSession() && (protocolBleSession.flags & HOST_STATE_RX_AUDIO_OPEN)) {
+    sendKv4pVendorFrame(*protocolBleSession.stream, COMMAND_RX_DIGITAL, data, len);
   }
 }
 
@@ -388,12 +411,15 @@ void inline sendWindowAck(size_t size) {
 
 typedef void (*CommandCallback)(ProtocolSession &session, RcvCommand command, uint8_t *params, size_t param_len);
 typedef void (*Ax25Callback)(uint8_t *ax25, size_t ax25_len);
+typedef void (*KissParameterCallback)(uint8_t command, uint8_t value);
 
 class KissParser {
 public:
-  KissParser(ProtocolSession &session, CommandCallback callback, Ax25Callback ax25Callback)
-    : _session(session), _callback(callback), _ax25Callback(ax25Callback), _frameLen(0), _encodedFrameLen(0),
-      _escape(false), _dropFrame(false), _inFrame(false) {}
+  KissParser(ProtocolSession &session, CommandCallback callback, Ax25Callback ax25Callback,
+             KissParameterCallback parameterCallback = nullptr)
+    : _session(session), _callback(callback), _ax25Callback(ax25Callback),
+      _parameterCallback(parameterCallback), _frameLen(0), _encodedFrameLen(0), _escape(false),
+      _dropFrame(false), _inFrame(false) {}
 
   void loop() {
     if (_session.stream == nullptr) {
@@ -411,6 +437,7 @@ private:
   ProtocolSession &_session;
   CommandCallback _callback;
   Ax25Callback _ax25Callback;
+  KissParameterCallback _parameterCallback;
   uint8_t _frame[KISS_MAX_FRAME_SIZE];
   size_t _frameLen;
   size_t _encodedFrameLen;
@@ -479,8 +506,12 @@ private:
       return;
     }
     if (kissCommand == KISS_CMD_DATA) {
-      if (payloadLen > 0 && payloadLen <= PROTO_MTU) {
+      if (payloadLen > 0 && payloadLen <= AX25_MAX_KISS_DATA_LEN) {
         _ax25Callback(payload, payloadLen);
+      }
+    } else if (kissCommand == KISS_CMD_TXDELAY || kissCommand == KISS_CMD_PERSIST || kissCommand == KISS_CMD_SLOTTIME) {
+      if (payloadLen == 1 && _parameterCallback != nullptr) {
+        _parameterCallback(kissCommand, payload[0]);
       }
     } else if (kissCommand == KISS_CMD_SETHARDWARE) {
       processVendorFrame(payload, payloadLen);
@@ -518,10 +549,11 @@ public:
 // This function processes incoming commands, taking a session, command type, parameters, and their length.
 void handleCommands(ProtocolSession &session, RcvCommand command, uint8_t *params, size_t param_len);
 void handleAx25Data(uint8_t *ax25, size_t ax25_len);
+void handleKissParameter(uint8_t command, uint8_t value);
 
 // Create a KISS parser and associate it with the existing command handler.
 // DATA frames dispatch as AX.25 bytes; KV4P vendor frames dispatch by kv4pCommand.
-KissParser parser(protocolUsbSession, &handleCommands, &handleAx25Data);
+KissParser parser(protocolUsbSession, &handleCommands, &handleAx25Data, &handleKissParameter);
 
 void inline protocolLoop() {
   parser.loop();

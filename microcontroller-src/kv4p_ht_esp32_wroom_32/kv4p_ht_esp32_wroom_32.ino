@@ -1,6 +1,6 @@
 /*
 KV4P-HT (see http://kv4p.com)
-Copyright (C) 2025 Vance Vagell
+Copyright (C) 2026 Vance Vagell
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -18,15 +18,18 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <Arduino.h>
 #include <BluetoothSerial.h>
-#include "BluedroidBleKissGattStream.h"
 #include <DRA818.h>
+#include <esp_system.h>
 #include <esp_task_wdt.h>
 #include "globals.h"
 #include "debug.h"
+#include "BluedroidBleKissGattStream.h"
 #include "led.h"
 #include "protocol.h"
+#include "state.h"
 #include "rxAudio.h"
 #include "txAudio.h"
+#include "ax25TxScheduler.h"
 #include "buttons.h"
 #include "utils.h"
 #include "board.h"
@@ -50,6 +53,7 @@ Kv4pBleKissStream::Config bleKissConfig() {
   cfg.maxNotifyChunksPerLoop = 4;
   cfg.minNotifyIntervalMs = 0;
   cfg.notifyFailureBackoffMs = 25;
+  cfg.writeQueueWaitMs = 15;
   cfg.txPower = ESP_PWR_LVL_P7;
   return cfg;
 }
@@ -62,35 +66,16 @@ Kv4pBleKissStream bleKissStream(bleKissConfig());
 bool bluetoothStarted = false;
 bool bluetoothProtocolConnected = false;
 bool bleKissProtocolConnected = false;
-KissParser bluetoothParser(protocolBtSession, &handleCommands, &handleAx25Data);
-KissParser bleKissParser(protocolBleSession, &handleCommands, &handleAx25Data);
-
-// Were we able to communicate with the radio module during setup()?
-const char RADIO_MODULE_NOT_FOUND = 'x';
-const char RADIO_MODULE_FOUND     = 'f';
-char radioModuleStatus            = RADIO_MODULE_NOT_FOUND;
-
-boolean rssiOn = true; // true if RSSI is enabled
-HostDesiredState desiredState = {
-  .sequence = 0,
-  .memoryId = -1,
-  .flags = HOST_STATE_HIGH_POWER | HOST_STATE_RSSI_ENABLED,
-  .bw = DRA818_25K,
-  .freq_tx = 0.0f,
-  .freq_rx = 0.0f,
-  .ctcss_tx = 0,
-  .squelch = 0,
-  .ctcss_rx = 0,
-};
-HostDesiredState appliedState = {};
-HostDesiredState persistedState = {};
-bool radioConfigApplied = false;
-bool filtersApplied = false;
-uint8_t lastDeviceStateError = DEVICE_STATE_ERROR_NONE;
-uint8_t latestRssi = 0;
-bool deviceStateDirty = false;
-
-Debounce squelchDebounce(100);
+KissParser bluetoothParser(protocolBtSession, &handleCommands, &handleAx25Data,
+  &handleKissParameter);
+KissParser bleKissParser(protocolBleSession, &handleCommands, &handleAx25Data,
+  &handleKissParameter);
+Ax25TxScheduler ax25TxScheduler;
+// SoftSQ needs its 250 ms close/open interval after a retune before its raw
+// HF-noise carrier decision is reliable. Keep a small loop-timing margin.
+static constexpr uint16_t AX25_OVERRIDE_RX_SETTLE_MS = 260;
+bool ax25OverrideChannelPrepared = false;
+uint32_t ax25OverrideChannelReadyAt = 0;
 
 float moduleMinRadioFreq() {
   return hw.rfModuleType == RF_SA818_UHF ? 400.0f : 134.0f;
@@ -148,6 +133,7 @@ void loadPersistedRadioState() {
     flags |= HOST_STATE_TX_ALLOWED;
   }
   desiredState.flags = flags;
+  softSquelchEffect.setDeadbandLevel(desiredState.squelch);
   desiredState.sequence = 0;
   desiredState.flags &= ~(HOST_STATE_PTT_REQUESTED | HOST_STATE_SESSION_FLAG_MASK);
   appliedState.memoryId = desiredState.memoryId;
@@ -195,7 +181,8 @@ void savePersistedRadioStateIfChanged() {
 uint8_t getFirmwareFeatures() {
   return (hw.features.hasHL ? FEATURE_HAS_HL : 0)
     | (hw.features.hasPhysPTT ? FEATURE_HAS_PHY_PTT : 0)
-    | FEATURE_HAS_ESP32_AFSK;
+    | FEATURE_HAS_ESP32_AFSK
+    | FEATURE_HAS_FREEDV_2400B;
 }
 
 Mode rxIdleMode() {
@@ -208,6 +195,10 @@ uint16_t desiredFilterFlags() {
 
 bool txAllowedByHost() {
   return desiredState.flags & HOST_STATE_TX_ALLOWED;
+}
+
+bool freeDv2400bEnabled() {
+  return desiredState.flags & HOST_STATE_FREEDV_2400B;
 }
 
 uint16_t deviceStateFlags(uint16_t sessionFlags) {
@@ -307,17 +298,19 @@ void reconcileDesiredState(bool sendReport = true) {
   uint16_t appliedFilterFlags = appliedState.flags & (HOST_STATE_FILTER_PRE | HOST_STATE_FILTER_HIGH | HOST_STATE_FILTER_LOW);
   if (!filtersApplied || filterFlags != appliedFilterFlags) {
     drainRadioSerial();
-    while (!sa818.filters((filterFlags & HOST_STATE_FILTER_PRE), (filterFlags & HOST_STATE_FILTER_HIGH), (filterFlags & HOST_STATE_FILTER_LOW))) {
+    while (!sa818.filters((filterFlags & HOST_STATE_FILTER_PRE), false, false)) {
       lastDeviceStateError = DEVICE_STATE_ERROR_FILTERS_FAILED;
       esp_task_wdt_reset();
     }
+    rxDownsample.setFilters((filterFlags & HOST_STATE_FILTER_HIGH) != 0,
+                            (filterFlags & HOST_STATE_FILTER_LOW) != 0);
     appliedState.flags = (appliedState.flags & ~(HOST_STATE_FILTER_PRE | HOST_STATE_FILTER_HIGH | HOST_STATE_FILTER_LOW)) | filterFlags;
     filtersApplied = true;
   }
 
   if ((desiredState.flags & HOST_STATE_RADIO_CONFIG_VALID) && radioConfigChanged()) {
     drainRadioSerial();
-    while (!sa818.group(desiredState.bw, desiredState.freq_tx, desiredState.freq_rx, desiredState.ctcss_tx, desiredState.squelch, desiredState.ctcss_rx)) {
+    while (!sa818.group(desiredState.bw, desiredState.freq_tx, desiredState.freq_rx, desiredState.ctcss_tx, 0, 0)) {
       lastDeviceStateError = DEVICE_STATE_ERROR_RADIO_CONFIG_FAILED;
       esp_task_wdt_reset();
     }
@@ -326,6 +319,10 @@ void reconcileDesiredState(bool sendReport = true) {
     appliedState.freq_rx = desiredState.freq_rx;
     appliedState.ctcss_tx = desiredState.ctcss_tx;
     appliedState.squelch = desiredState.squelch;
+    softSquelchEffect.setDeadbandLevel(appliedState.squelch);
+    freeDvSquelch.setLevel(appliedState.squelch);
+    if (freeDv2400bEnabled()) squelched = !freeDvSquelch.open();
+    softSquelchEffect.setCtcssTone(desiredState.ctcss_rx);
     appliedState.ctcss_rx = desiredState.ctcss_rx;
     appliedState.memoryId = desiredState.memoryId;
     appliedState.flags |= HOST_STATE_RADIO_CONFIG_VALID;
@@ -347,6 +344,8 @@ void setMode(Mode newMode) {
   if (mode == newMode) {
     return;
   }
+  freeDvRx.reset();
+  freeDvTx.reset();
   mode = newMode;
   markDeviceStateDirty();
   switch (mode) {
@@ -359,13 +358,13 @@ void setMode(Mode newMode) {
     case MODE_RX:
       _LOGI("MODE_RX");
       digitalWrite(hw.pins.pinPtt, HIGH);
-      squelchDebounce.forceState(true);
       endI2STx();
       initI2SRx();
     break;
     case MODE_TX:
       _LOGI("MODE_TX");
       txStartTime = millis();
+      txWatchDog.reset(txStartTime);
       digitalWrite(hw.pins.pinPtt, LOW);
       endI2SRx();
       initI2STx();
@@ -413,9 +412,9 @@ void setup() {
   // Set up radio module defaults
   pinMode(hw.pins.pinPd, OUTPUT);
   digitalWrite(hw.pins.pinPd, HIGH);  // Power on
-  pinMode(hw.pins.pinSq, INPUT);
   pinMode(hw.pins.pinPtt, OUTPUT);
   digitalWrite(hw.pins.pinPtt, HIGH);  // Rx
+  pinMode(hw.pins.pinSq, INPUT);
   if (hw.features.hasHL) {
     pinMode(hw.pins.pinHl, OUTPUT);
     digitalWrite(hw.pins.pinHl, LOW);  // High power
@@ -426,7 +425,7 @@ void setup() {
   //
   debugSetup();
   // Begin in STOPPED mode
-  squelched = (digitalRead(hw.pins.pinSq) == HIGH);
+  squelched = true;
   setMode(MODE_STOPPED);
   initI2SRx();
   ledSetup();
@@ -434,7 +433,7 @@ void setup() {
   if (radioModuleStatus == RADIO_MODULE_FOUND) {
     reconcileDesiredState(false);
   }
-  sendHello(protocolUsbSession, FIRMWARE_VER, radioModuleStatus, hw.rfModuleType, moduleMinRadioFreq(), moduleMaxRadioFreq(), getFirmwareFeatures(), currentDeviceState());
+  sendHello(protocolUsbSession, FIRMWARE_VER, radioModuleStatus, hw.rfModuleType, moduleMinRadioFreq(), moduleMaxRadioFreq(), getFirmwareFeatures(), currentDeviceState(protocolUsbSession.flags));
   _LOGI("Setup is finished");
 }
 
@@ -465,8 +464,17 @@ void initRadio(bool isHigh) {
 void handleCommands(ProtocolSession &session, RcvCommand command, uint8_t *params, size_t param_len) {
   switch (command) {
     case COMMAND_HOST_TX_AUDIO:
-      if (mode == MODE_TX) {
+      if (mode == MODE_TX && !freeDv2400bEnabled()) {
         processTxAudio(params, param_len);
+        esp_task_wdt_reset();
+      }
+      break;
+    case COMMAND_HOST_TX_DIGITAL:
+      // The command ID unambiguously selects the digital path. Do not also
+      // gate it on the session flag: PTT and session-state snapshots travel
+      // independently and the first voice frame can win that race.
+      if (mode == MODE_TX && freeDv2400bEnabled()) {
+        processTxDigital(params, param_len);
         esp_task_wdt_reset();
       }
       break;
@@ -477,10 +485,22 @@ void handleCommands(ProtocolSession &session, RcvCommand command, uint8_t *param
         uint16_t oldSessionFlags = session.flags;
         session.flags = incomingState.flags & HOST_STATE_SESSION_FLAG_MASK;
         bool sessionFlagsChanged = oldSessionFlags != session.flags;
+        // Desired-state sequence is global across transports; hosts must sync from
+        // DeviceState.appliedSequence before sending their next update.
         bool globalStateChanged = incomingState.sequence > desiredState.sequence;
         if (globalStateChanged) {
+          const bool freeDvModeChanged =
+              ((incomingState.flags ^ desiredState.flags) &
+               HOST_STATE_FREEDV_2400B) != 0;
           desiredState = incomingState;
           desiredState.flags &= HOST_STATE_GLOBAL_FLAG_MASK;
+          if (freeDvModeChanged) {
+            latestRssi = 0;
+            freeDvSquelch.reset();
+            squelched = freeDv2400bEnabled()
+                ? !freeDvSquelch.open()
+                : !softSquelchEffect.isSoftOpen();
+          }
         }
         if (sessionFlagsChanged || globalStateChanged) {
           reconcileDesiredState();
@@ -488,37 +508,146 @@ void handleCommands(ProtocolSession &session, RcvCommand command, uint8_t *param
         esp_task_wdt_reset();
       }
       break;
+    case COMMAND_HOST_TX_AX25:
+      if (param_len > sizeof(Ax25TxOverride) && txAllowedByHost()) {
+        Ax25TxOverride txOverride;
+        memcpy(&txOverride, params, sizeof(txOverride));
+        size_t ax25Len = param_len - sizeof(txOverride);
+        if (isModuleRadioFreq(txOverride.freqTx) && ax25Len <= AX25_MAX_KISS_DATA_LEN
+            && !ax25TxScheduler.enqueue(params + sizeof(txOverride), ax25Len, &txOverride)) {
+          _LOGW("AX.25 TX queue full; dropped frequency-override job");
+        }
+      }
+      break;
   }
 }
 
 void handleAx25Data(uint8_t *ax25, size_t ax25_len) {
-  if (ax25_len > 0 && ax25_len <= PROTO_MTU && txAllowedByHost()) {
-    setMode(MODE_TX);
-    sendCurrentDeviceState();
-    pulseAprsTxLED();
-    processTxAx25(ax25, ax25_len);
-    setMode(rxIdleMode());
-    sendCurrentDeviceState();
-    esp_task_wdt_reset();
+  if (ax25_len > 0 && ax25_len <= AX25_MAX_KISS_DATA_LEN && txAllowedByHost()) {
+    if (!ax25TxScheduler.enqueue(ax25, ax25_len)) {
+      _LOGW("AX.25 TX queue full; dropped KISS DATA frame");
+    }
   }
 }
 
+void handleKissParameter(uint8_t command, uint8_t value) {
+  if (command == KISS_CMD_TXDELAY) ax25TxScheduler.setTxDelay(value);
+  else if (command == KISS_CMD_PERSIST) ax25TxScheduler.setPersist(value);
+  else if (command == KISS_CMD_SLOTTIME) ax25TxScheduler.setSlotTime(value);
+}
+
+void prepareAx25TxOverrideChannel(const Ax25TxOverride &txOverride) {
+  drainRadioSerial();
+  // Tune RX to the packet's target before carrier sense. The normal radio
+  // configuration is deliberately marked stale so it is restored after TX.
+  while (!sa818.group(txOverride.bw, txOverride.freqTx, txOverride.freqTx, txOverride.ctcssTx, 0, 0)) {
+    lastDeviceStateError = DEVICE_STATE_ERROR_RADIO_CONFIG_FAILED;
+    esp_task_wdt_reset();
+  }
+  radioConfigApplied = false;
+  ax25OverrideChannelPrepared = true;
+  ax25OverrideChannelReadyAt = millis() + AX25_OVERRIDE_RX_SETTLE_MS;
+}
+
+// Android sends COMMAND_HOST_TX_AX25 for every APRS packet, including a
+// beacon on the channel that is already configured. Avoid an unnecessary
+// SA818 group command in that case: it would otherwise also force a second
+// group command immediately after PTT is released.
+bool ax25OverrideMatchesActiveChannel(const Ax25TxOverride &txOverride) {
+  static constexpr float FREQ_MATCH_EPSILON_MHZ = 0.0001f;
+  return radioConfigApplied
+    && (desiredState.flags & HOST_STATE_RADIO_CONFIG_VALID)
+    && txOverride.bw == desiredState.bw
+    && txOverride.ctcssTx == desiredState.ctcss_tx
+    && fabsf(txOverride.freqTx - desiredState.freq_tx) < FREQ_MATCH_EPSILON_MHZ
+    && fabsf(txOverride.freqTx - desiredState.freq_rx) < FREQ_MATCH_EPSILON_MHZ;
+}
+
+void ax25TxLoop() {
+  const Ax25TxJob *pendingJob = ax25TxScheduler.head();
+  if (pendingJob == nullptr) return;
+  bool receiveIdle = mode == MODE_RX || mode == MODE_STOPPED;
+  if (!receiveIdle || !txAllowedByHost()) return;
+  uint32_t now = millis();
+  if (pendingJob->hasTxOverride && !ax25OverrideMatchesActiveChannel(pendingJob->txOverride)) {
+    // A host configuration update may have restored the normal radio while
+    // this job was waiting, so prepare the target channel again in that case.
+    if (!ax25OverrideChannelPrepared || radioConfigApplied) {
+      prepareAx25TxOverrideChannel(pendingJob->txOverride);
+      return;
+    }
+    if ((int32_t)(now - ax25OverrideChannelReadyAt) < 0) return;
+  }
+
+  // Use SoftSQ's raw HF-noise decision for RF/voice carrier detection. Audio
+  // CTCSS and UI-squelch choices must not affect CSMA channel access.
+  bool ourTx = mode == MODE_TX;
+  bool afskDcd = afskDemod.carrierDetected();
+  bool rfCarrierDetected = softSquelchEffect.isCarrierDetected();
+  bool channelBusy = ourTx || afskDcd || rfCarrierDetected;
+  bool channelClear = !channelBusy;
+  if (!ax25TxScheduler.ready(now, channelClear, (uint8_t)esp_random())) {
+    return;
+  }
+  const Ax25TxJob *job = ax25TxScheduler.head();
+  if (job == nullptr) return;
+
+  setMode(MODE_TX);
+  latestRssi = (uint8_t)TX_AUDIO_LEVEL_FULL_SCALE_RSSI;
+  txAudioLevel = TX_AUDIO_LEVEL_FULL_SCALE_RSSI;
+  sendCurrentDeviceState();
+  // BLE state frames are queued until bleKissLoop() runs. AFSK modulation is
+  // synchronous, so flush TX state now rather than delivering it together
+  // with the RX state after the packet finishes.
+  if (protocolHasBleSession()
+      && (protocolBleSession.flags & HOST_STATE_ENABLE_STATUS_REPORTS)) {
+    bleKissStream.flush();
+  }
+  pulseAprsTxLED();
+  bool firstFrame = true;
+  bool sentOverride = job->hasTxOverride;
+  do {
+    const Ax25TxJob *nextJob = ax25TxScheduler.next();
+    bool batchNextStandardFrame = !job->hasTxOverride && nextJob != nullptr && !nextJob->hasTxOverride;
+    processTxAx25(job->data, job->len, firstFrame ? ax25TxScheduler.txDelayMs() : 0,
+                  batchNextStandardFrame ? 0 : TX_AFSK_TAIL_SILENCE_MS);
+    ax25TxScheduler.complete();
+    if (!batchNextStandardFrame) break;
+    job = ax25TxScheduler.head();
+    firstFrame = false;
+  } while (job != nullptr);
+  setMode(rxIdleMode());
+  if (sentOverride) ax25OverrideChannelPrepared = false;
+  // Apply the latest desired normal configuration only after PTT is released.
+  reconcileDesiredState(false);
+  sendCurrentDeviceState();
+  esp_task_wdt_reset();
+}
+
 void rssiLoop() {
-  if (rssiOn && mode == MODE_RX) {
+  if (rssiOn) {
     EVERY_N_MILLISECONDS(RSSI_REPORT_INTERVAL_MS) {
-      // TODO fix the dra818 library's implementation of rssi(). Right now it just drops the
-      // return value from the module, and just tells us success/fail.
-      // int rssi = dra->rssi();
-      Serial2.println("RSSI?");
-      String rssiResponse = Serial2.readString();
-      if (rssiResponse.length() > 7) {
-        String rssiStr = rssiResponse.substring(5);
-        int rssiInt    = rssiStr.toInt();
-        if (rssiInt >= 0 && rssiInt <= 255) {
-          uint8_t rssi = (uint8_t)rssiInt;
-          if (latestRssi != rssi) {
-            latestRssi = rssi;
-            markDeviceStateDirty();
+      if (mode == MODE_TX) {
+        uint8_t rssi = (uint8_t)roundf(constrain(txAudioLevel, 0.0f, 255.0f));
+        if (latestRssi != rssi) {
+          latestRssi = rssi;
+          markDeviceStateDirty();
+        }
+      } else if (mode == MODE_RX && !freeDv2400bEnabled()) {
+        // TODO fix the dra818 library's implementation of rssi(). Right now it just drops the
+        // return value from the module, and just tells us success/fail.
+        // int rssi = dra->rssi();
+        Serial2.println("RSSI?");
+        String rssiResponse = Serial2.readString();
+        if (rssiResponse.length() > 7) {
+          String rssiStr = rssiResponse.substring(5);
+          int rssiInt    = rssiStr.toInt();
+          if (rssiInt >= 0 && rssiInt <= 255) {
+            uint8_t rssi = (uint8_t)rssiInt;
+            if (latestRssi != rssi) {
+              latestRssi = rssi;
+              markDeviceStateDirty();
+            }
           }
         }
       }
@@ -575,12 +704,14 @@ void bluetoothLoop() {
 void bleKissLoop() {
   bleKissStream.loop();
   bool connected = bleKissStream.isConnected();
-  if (connected && !bleKissProtocolConnected) {
-    bleKissProtocolConnected = true;
-    protocolBleSession.connected = true;
+  bool protocolReady = bleKissStream.canSend();
+  if (protocolReady && !bleKissProtocolConnected) {
     bleKissParser.reset();
     sendHello(protocolBleSession, FIRMWARE_VER, radioModuleStatus, hw.rfModuleType, moduleMinRadioFreq(), moduleMaxRadioFreq(), getFirmwareFeatures(), currentDeviceState(protocolBleSession.flags));
-  } else if (!connected && bleKissProtocolConnected) {
+    bleKissProtocolConnected = true;
+    protocolBleSession.connected = true;
+    _LOGI("BLE KISS sent HELLO after notify subscription: firmware=%u window=%u", FIRMWARE_VER, BLE_KISS_WINDOW_SIZE);
+  } else if ((!connected || !protocolReady) && bleKissProtocolConnected) {
     bleKissProtocolConnected = false;
     protocolBleSession.connected = false;
     uint16_t oldSessionFlags = protocolBleSession.flags;
@@ -597,7 +728,9 @@ void bleKissLoop() {
 }
 
 void squelchLoop() {
-  bool nextSquelched = squelchDebounce.debounce((digitalRead(hw.pins.pinSq) == HIGH));
+  freeDvSquelchLoop();
+  if (freeDv2400bEnabled()) return;
+  bool nextSquelched = !softSquelchEffect.isSoftOpen();
   if (nextSquelched != squelched) {
     squelched = nextSquelched;
     markDeviceStateDirty();
@@ -613,6 +746,7 @@ void loop() {
   bluetoothLoop();
   bleKissLoop();
   rxAudioLoop();
+  ax25TxLoop();
   txAudioLoop();
   rssiLoop();
   deviceStateLoop();

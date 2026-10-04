@@ -70,6 +70,7 @@ struct APRSEntry: Identifiable, Codable {
 @Observable
 class APRSController {
     @ObservationIgnored weak var store: RadioStore?
+    @ObservationIgnored weak var notifier: APRSNotifying?
 
     private static let legacyEntriesKey = "aprsEntries"
     private static let msgNumKey = "aprsMessageNumber"
@@ -138,6 +139,19 @@ class APRSController {
             entries.removeFirst(entries.count - Self.maxEntries)
             persistence.trimEntries(max: Self.maxEntries)
         }
+        notifyIfNeeded(entry)
+        if !entry.isOutgoing { store?.liveActivity.received(entry) }
+    }
+
+    // Hand a received entry to the notifier, which applies the full gate
+    // (kind/addressed/distance/mute/cooldown). Outgoing entries never notify.
+    private func notifyIfNeeded(_ entry: APRSEntry) {
+        guard !entry.isOutgoing, let store, store.aprsNotify.enabled,
+              let notifier else { return }
+        let addressed = isAddressedToMe(entry.toCallsign)
+        let dist = entry.distanceMi(from: store.locationManager.location)
+        notifier.consider(entry, settings: store.aprsNotify,
+                           isAddressedToMe: addressed, distanceMi: dist, now: Date())
     }
 
     func clearAll() {
@@ -172,7 +186,8 @@ class APRSController {
         let now = Date()
         var from = frame.source.display
         var to = frame.destination.display
-        var info = parseAPRSPayload(frame.payload)
+        var info = parseMicEPayload(frame.payload, destCall: frame.destination.base)
+            ?? parseAPRSPayload(frame.payload)
 
         // Third-party relayed traffic (} DTI): the real originator is the inner
         // packet's source, not the RF-carrying station. Unwrap so the message
@@ -181,7 +196,8 @@ class APRSController {
         if let tp = Self.unwrapThirdParty(frame.payload) {
             from = tp.source
             to = tp.destination
-            info = parseAPRSPayload(tp.info)
+            info = parseMicEPayload(tp.info, destCall: tp.destination)
+                ?? parseAPRSPayload(tp.info)
         }
 
         let (frameKind, frameMsgNum) = Self.frameIdentity(of: info)
@@ -517,9 +533,14 @@ class APRSController {
         let symbol = store.aprsSymbol.first ?? "["
         let payload = "=" + compressedPositionString(lat: lat, lon: lon, symbolCode: symbol)
 
+        append(APRSEntry(
+            fromCallsign: myCallsign?.display ?? "", toCallsign: KV4P_HT_VENDOR_TOCALL,
+            kind: .position, text: "Position beacon",
+            timestamp: Date(), lat: lat, lon: lon,
+            symbolTable: "/", symbolCode: String(symbol), isOutgoing: true))
+
         let beaconFreq = Float(store.aprsBeaconFrequency)
         if let freq = beaconFreq, store.aprsBeaconFrequency != "Current" {
-            // Frequency-switch beacon: tune, settle, send, wait out TX, restore.
             let originalFreq = store.currentFreq
             store.sendRadioState(freq: freq, simplexOverride: true)
             try? await Task.sleep(for: .milliseconds(500))
@@ -529,12 +550,6 @@ class APRSController {
         } else {
             transmitPayload(payload)
         }
-
-        append(APRSEntry(
-            fromCallsign: myCallsign?.display ?? "", toCallsign: KV4P_HT_VENDOR_TOCALL,
-            kind: .position, text: "Position beacon",
-            timestamp: Date(), lat: lat, lon: lon,
-            symbolTable: "/", symbolCode: String(symbol), isOutgoing: true))
         return .sent
     }
 

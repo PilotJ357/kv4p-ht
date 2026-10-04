@@ -149,6 +149,52 @@ public class ProtocolKissTest {
     }
 
     @Test
+    public void senderEncodesKissTxDelay() {
+        List<byte[]> frames = new ArrayList<>();
+        Protocol.Sender sender = new Protocol.Sender(frames::add, false);
+
+        sender.setKissTxDelay(75);
+
+        assertEquals(1, frames.size());
+        assertArrayEquals(new byte[]{
+            (byte) Protocol.KISS_FEND,
+            Protocol.KISS_CMD_TXDELAY,
+            75,
+            (byte) Protocol.KISS_FEND,
+        }, frames.get(0));
+    }
+
+    @Test
+    public void senderEncodesAx25FrequencyOverride() {
+        assertEquals(0x0F, Protocol.SndCommand.COMMAND_HOST_TX_AX25.getValue());
+        assertEquals(0x0E, Protocol.SndCommand.COMMAND_HOST_TX_DIGITAL.getValue());
+        List<byte[]> frames = new ArrayList<>();
+        Protocol.Sender sender = new Protocol.Sender(frames::add, false);
+
+        sender.txAx25OnFrequency(144.3900f, Protocol.DRA818_12K5, (byte) 7, new byte[]{0x11, 0x22});
+
+        ByteBuffer overridePayload = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+        overridePayload.putFloat(144.3900f);
+        overridePayload.put(Protocol.DRA818_12K5);
+        overridePayload.put((byte) 7);
+        overridePayload.put((byte) 0x11);
+        overridePayload.put((byte) 0x22);
+        assertEquals(1, frames.size());
+        assertArrayEquals(buildKissFrame(
+            Protocol.KISS_CMD_SETHARDWARE,
+            buildKv4pVendorPayload(Protocol.SndCommand.COMMAND_HOST_TX_AX25.getValue(), overridePayload.array())),
+            frames.get(0));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void senderRejectsOversizeAx25FrequencyOverride() {
+        Protocol.Sender sender = new Protocol.Sender(frame -> { }, false);
+
+        sender.txAx25OnFrequency(144.3900f, Protocol.DRA818_12K5, (byte) 0,
+            new byte[Protocol.AX25_MAX_KISS_DATA_LEN + 1]);
+    }
+
+    @Test
     public void parserUnescapesDataFrameAndDispatchesAx25() {
         Protocol.KissParser parser = newParser();
         parser.processBytes(new byte[]{
@@ -257,9 +303,9 @@ public class ProtocolKissTest {
     }
 
     @Test
-    public void parserDropsOverMtuDataFrame() {
+    public void parserDropsOversizedAx25DataFrame() {
         Protocol.KissParser parser = newParser();
-        byte[] frame = new byte[Protocol.PROTO_MTU + 4];
+        byte[] frame = new byte[Protocol.AX25_MAX_KISS_DATA_LEN + 4];
         frame[0] = (byte) Protocol.KISS_FEND;
         frame[1] = Protocol.KISS_CMD_DATA;
         for (int i = 2; i < frame.length - 1; i++) {
@@ -360,7 +406,7 @@ public class ProtocolKissTest {
         versionPayload.put((byte) 1);
         versionPayload.putFloat(400.0f);
         versionPayload.putFloat(480.0f);
-        versionPayload.put((byte) 0x03);
+        versionPayload.put((byte) 0x0B);
 
         java.util.Optional<Protocol.FirmwareVersion> parsed = Protocol.FirmwareVersion.from(versionPayload, 0, versionPayload.array().length);
 
@@ -372,6 +418,7 @@ public class ProtocolKissTest {
         assertEquals(480.0f, parsed.get().getMaxRadioFreq(), 0.0001f);
         assertTrue(parsed.get().isHasHl());
         assertTrue(parsed.get().isHasPhysPtt());
+        assertTrue(parsed.get().isHasFreeDv2400b());
     }
 
     @Test
@@ -686,6 +733,65 @@ public class ProtocolKissTest {
     }
 
     @Test
+    public void newerDeviceStateAdvancesDesiredSequenceForNextLocalChange() {
+        CapturingSender sender = new CapturingSender();
+        RadioModuleController controller = new RadioModuleController();
+        controller.attachSender(sender);
+        Protocol.DeviceState initialState = Protocol.DeviceState.builder()
+            .appliedSequence(7)
+            .memoryId(42)
+            .flags(Protocol.HOST_STATE_RADIO_CONFIG_VALID
+                | Protocol.HOST_STATE_HIGH_POWER
+                | Protocol.HOST_STATE_RSSI_ENABLED
+                | Protocol.HOST_STATE_ENABLE_STATUS_REPORTS)
+            .bw(Protocol.DRA818_25K)
+            .freqTx(146.5200f)
+            .freqRx(146.5200f)
+            .ctcssTx((byte) 0)
+            .squelch((byte) 1)
+            .ctcssRx((byte) 0)
+            .radioModuleStatus(Protocol.RadioStatus.RADIO_STATUS_FOUND)
+            .mode(Protocol.DeviceMode.DEVICE_MODE_RX)
+            .lastError(0)
+            .latestRssi(0)
+            .build();
+
+        controller.seedFromDeviceState(initialState);
+        controller.markTransportReady();
+        Protocol.HostDesiredState statusRequest = sender.sentStates.get(0);
+        controller.updateDeviceState(deviceStateMatching(statusRequest, 0));
+
+        Protocol.DeviceState externalUpdate = Protocol.DeviceState.builder()
+            .appliedSequence(25)
+            .memoryId(77)
+            .flags(Protocol.HOST_STATE_RADIO_CONFIG_VALID
+                | Protocol.HOST_STATE_HIGH_POWER
+                | Protocol.HOST_STATE_RSSI_ENABLED
+                | Protocol.HOST_STATE_ENABLE_STATUS_REPORTS)
+            .bw(Protocol.DRA818_12K5)
+            .freqTx(144.3900f)
+            .freqRx(144.3900f)
+            .ctcssTx((byte) 4)
+            .squelch((byte) 5)
+            .ctcssRx((byte) 6)
+            .radioModuleStatus(Protocol.RadioStatus.RADIO_STATUS_FOUND)
+            .mode(Protocol.DeviceMode.DEVICE_MODE_RX)
+            .lastError(0)
+            .latestRssi(0)
+            .build();
+
+        controller.updateDeviceState(externalUpdate);
+        controller.setSquelch(8);
+
+        Protocol.HostDesiredState localChange = sender.sentStates.get(sender.sentStates.size() - 1);
+        assertEquals(26, localChange.getSequence());
+        assertEquals(77, localChange.getMemoryId());
+        assertEquals(144.3900f, localChange.getFreqTx(), 0.0001f);
+        assertEquals(144.3900f, localChange.getFreqRx(), 0.0001f);
+        assertEquals(8, localChange.getSquelch());
+    }
+
+    @Test
     public void seedFromDeviceStateDoesNotCarryTransientHostFlags() {
         CapturingSender sender = new CapturingSender();
         RadioModuleController controller = new RadioModuleController();
@@ -696,7 +802,8 @@ public class ProtocolKissTest {
             .flags(Protocol.HOST_STATE_RADIO_CONFIG_VALID
                 | Protocol.HOST_STATE_PTT_REQUESTED
                 | Protocol.HOST_STATE_RX_AUDIO_OPEN
-                | Protocol.HOST_STATE_HIGH_POWER)
+                | Protocol.HOST_STATE_HIGH_POWER
+                | Protocol.HOST_STATE_FREEDV_2400B)
             .bw(Protocol.DRA818_25K)
             .freqTx(146.5200f)
             .freqRx(146.5200f)
@@ -718,6 +825,7 @@ public class ProtocolKissTest {
         assertEquals(0, flags & Protocol.HOST_STATE_PTT_REQUESTED);
         assertEquals(0, flags & Protocol.HOST_STATE_RX_AUDIO_OPEN);
         assertNotEquals(0, flags & Protocol.HOST_STATE_HIGH_POWER);
+        assertNotEquals(0, flags & Protocol.HOST_STATE_FREEDV_2400B);
         assertNotEquals(0, flags & Protocol.HOST_STATE_ENABLE_STATUS_REPORTS);
     }
 
@@ -887,6 +995,26 @@ public class ProtocolKissTest {
         };
 
         assertFalse(Protocol.Hello.from(ByteBuffer.wrap(shortPayload).order(ByteOrder.LITTLE_ENDIAN), 0, 12).isPresent());
+    }
+
+    @Test
+    public void sMeterUsesCalibratedRssiRange() {
+        assertEquals(0, Protocol.calculateSMeterValue(0));
+        assertEquals(0, Protocol.calculateSMeterValue(16));
+        assertEquals(1, Protocol.calculateSMeterValue(17));
+        assertEquals(2, Protocol.calculateSMeterValue(22));
+        assertEquals(8, Protocol.calculateSMeterValue(56));
+        assertEquals(9, Protocol.calculateSMeterValue(57));
+        assertEquals(9, Protocol.calculateSMeterValue(64));
+        assertEquals(9, Protocol.calculateSMeterValue(65));
+        assertEquals(10, Protocol.calculateSMeterValue(74));
+        assertEquals(10, Protocol.calculateSMeterValue(82));
+        assertEquals(11, Protocol.calculateSMeterValue(90));
+        assertEquals(11, Protocol.calculateSMeterValue(99));
+        assertEquals(12, Protocol.calculateSMeterValue(107));
+        assertEquals(12, Protocol.calculateSMeterValue(109));
+        assertEquals(13, Protocol.calculateSMeterValue(110));
+        assertEquals(13, Protocol.calculateSMeterValue(255));
     }
 
     private Protocol.KissParser newParser() {

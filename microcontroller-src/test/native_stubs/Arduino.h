@@ -1,6 +1,6 @@
 /*
 KV4P-HT (see http://kv4p.com)
-Copyright (C) 2025 Vance Vagell
+Copyright (C) 2026 Vance Vagell
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -22,6 +22,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+
+#ifndef PI
+#define PI 3.14159265358979323846f
+#endif
+
+inline unsigned long millis() {
+  return 0;
+}
 
 class NativeEsp {
 public:
