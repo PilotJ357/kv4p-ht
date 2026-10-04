@@ -515,11 +515,13 @@ class APRSController {
     // MARK: - Position beacon
 
     enum BeaconResult {
-        case sent, noLocation, notReady
+        case sent, noLocation, notReady, noConsent
     }
 
     func sendPositionBeacon() async -> BeaconResult {
-        guard let store, canTransmit() else { return .notReady }
+        guard let store else { return .notReady }
+        guard store.aprsBeaconConsented else { return .noConsent }
+        guard canTransmit() else { return .notReady }
         guard let location = store.locationManager.location else {
             store.locationManager.requestLocation()
             return .noLocation
@@ -558,7 +560,7 @@ class APRSController {
     func updateBeaconTimer() {
         beaconTimer?.invalidate()
         beaconTimer = nil
-        guard let store, store.aprsBeaconEnabled else { return }
+        guard let store, store.aprsBeaconEnabled, store.aprsBeaconConsented else { return }
         let interval = TimeInterval(max(1, store.aprsBeaconIntervalMin)) * 60
         beaconTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in

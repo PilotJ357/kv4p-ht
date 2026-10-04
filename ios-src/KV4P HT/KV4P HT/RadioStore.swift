@@ -56,21 +56,6 @@ extension Memory {
     }
 }
 
-struct Repeater: Identifiable {
-    let id = UUID()
-    var name: String
-    var callsign: String
-    var freq: Float
-    var offset: Float
-    var plTone: Float
-    var distanceMi: Float
-    var location: String
-
-    var freqString: String { String(format: "%.3f", freq) }
-    var offsetString: String { offset > 0 ? String(format: "+%.1f", offset) : String(format: "%.1f", offset) }
-
-}
-
 struct CaptionLine: Identifiable {
     let id = UUID()
     var callsign: String
@@ -115,9 +100,6 @@ class RadioStore {
 
     // ── Location
     let locationManager = LocationManager()
-    var repeaterFetchState: RepeaterFetchState = .idle
-    var repeaterSearchDistance: Int = 25  // miles
-    var repeaterSearchBand: Int = 4      // 4=2m, 16=70cm
 
     // ── Voice
     var voiceMode: VoiceMode = .vfo
@@ -132,7 +114,7 @@ class RadioStore {
         }
     }
     // Desired VFO channel config; survives without a memory match. Seeded
-    // from firmware-applied state on connect and from memory/repeater tunes.
+    // from firmware-applied state on connect and from memory tunes.
     var vfoOffset: Float = 0       // MHz, 0 = simplex
     var vfoToneIndex: UInt8 = 0    // CTCSS index, 0 = off
     var captionsEnabled: Bool = false
@@ -142,7 +124,7 @@ class RadioStore {
     var scanPaused: Bool = false
     @ObservationIgnored private var scanTimer: Timer?
 
-    // ── Memories / Repeaters
+    // ── Memories
     private static let memoriesKey = "savedMemories"
     private var isInitializing = true
     var memories: [Memory] = [] {
@@ -150,8 +132,6 @@ class RadioStore {
             if !isInitializing { saveMemories() }
         }
     }
-    var repeaters: [Repeater] = []
-    var activeRepeaterId: UUID? = nil
 
     // ── APRS
     let aprs = APRSController()
@@ -159,6 +139,17 @@ class RadioStore {
     var selectedEntry: APRSEntry? = nil
     var aprsSymbol: String = "[" {
         didSet { if !isInitializing { saveAprsSettings() } }
+    }
+    // Position beaconing broadcasts callsign + location publicly and is
+    // relayed to the internet by iGates, so it stays off until the user
+    // accepts the disclosure in BeaconSettingsView. Never enabled by default.
+    var aprsBeaconConsented: Bool = false {
+        didSet {
+            if !isInitializing {
+                if !aprsBeaconConsented { aprsBeaconEnabled = false }
+                saveAprsSettings()
+            }
+        }
     }
     var aprsBeaconEnabled: Bool = false {
         didSet {
@@ -288,6 +279,10 @@ class RadioStore {
         }
         isInitializing = false
         configureSpeechManager()
+        // Location is only used by features the user opted into.
+        if aprsBeaconEnabled || aprsNotify.distanceFilterMi != nil {
+            locationManager.requestLocation()
+        }
 
         aprs.store = self
         aprs.notifier = notifications
@@ -338,6 +333,7 @@ class RadioStore {
         var beaconFrequency: String
         var positionApprox: Bool
         var silenceRxOnAprsFreq: Bool = false
+        var beaconConsented: Bool?
     }
 
     private func loadAprsSettings() {
@@ -346,7 +342,9 @@ class RadioStore {
         callsign = s.callsign
         aprsSSID = s.ssid
         aprsSymbol = s.symbol
-        aprsBeaconEnabled = s.beaconEnabled
+        aprsBeaconConsented = s.beaconConsented ?? false
+        // Settings saved before the consent gate existed may have beaconing on.
+        aprsBeaconEnabled = s.beaconEnabled && aprsBeaconConsented
         aprsBeaconIntervalMin = s.beaconIntervalMin
         aprsBeaconFrequency = s.beaconFrequency
         aprsPositionApprox = s.positionApprox
@@ -358,7 +356,7 @@ class RadioStore {
             callsign: callsign, ssid: aprsSSID, symbol: aprsSymbol,
             beaconEnabled: aprsBeaconEnabled, beaconIntervalMin: aprsBeaconIntervalMin,
             beaconFrequency: aprsBeaconFrequency, positionApprox: aprsPositionApprox,
-            silenceRxOnAprsFreq: silenceRxOnAprsFreq)
+            silenceRxOnAprsFreq: silenceRxOnAprsFreq, beaconConsented: aprsBeaconConsented)
         guard let data = try? JSONEncoder().encode(s) else { return }
         UserDefaults.standard.set(data, forKey: Self.aprsSettingsKey)
     }
@@ -395,6 +393,7 @@ class RadioStore {
 
     private func configureSpeechManager() {
         speechManager.configure(language: captionLanguage)
+        if !speechManager.supportsOnDeviceRecognition { liveCaptions = false }
 
         speechManager.onPartialResult = { [weak self] text in
             guard let self else { return }
@@ -607,7 +606,7 @@ class RadioStore {
     // config (and optional freq/PTT change) into the controller's desired
     // state as one batch. The controller decides if a DesiredState frame
     // actually goes out. Offset and tone come from the VFO fields — tuning
-    // a memory or repeater seeds them first via applyMemory/tune(toRepeater:).
+    // a memory seeds them first via applyMemory.
     // simplexOverride: transmit on the RX frequency with no tone, without
     // touching the VFO fields (APRS frequency-switch beacons are simplex).
     func sendRadioState(freq: Float? = nil, ptt: Bool = false, simplexOverride: Bool = false) {
@@ -630,120 +629,11 @@ class RadioStore {
         sendRadioState(freq: mem.freq)
     }
 
-    func tune(toRepeater rep: Repeater) {
-        vfoOffset = rep.offset
-        vfoToneIndex = ctcssIndex(for: rep.plTone)
-        sendRadioState(freq: rep.freq)
-    }
-
     // Pill-editor entry point: one desired-state push for both fields.
     func setVfoConfig(offset: Float, toneIndex: UInt8) {
         vfoOffset = offset
         vfoToneIndex = toneIndex
         sendRadioState()
-    }
-
-    // MARK: - RepeaterBook
-
-    func fetchNearbyRepeaters() {
-        guard let loc = locationManager.location else {
-            locationManager.requestLocation()
-            return
-        }
-        repeaterFetchState = .loading
-        let lat = loc.coordinate.latitude
-        let lon = loc.coordinate.longitude
-        let dist = repeaterSearchDistance
-        let band = repeaterSearchBand
-        let urlStr = "https://www.repeaterbook.com/repeaters/prox_result.php?city=&lat=\(lat)&long=\(lon)&distance=\(dist)&Dunit=m&band%5B%5D=\(band)&features%5B%5D=FM&use%5B%5D=OPEN&status_id=1"
-
-        Task {
-            do {
-                let repeaters = try await fetchRepeaterBookHTML(urlStr)
-                await MainActor.run {
-                    self.repeaters = repeaters
-                    self.repeaterFetchState = repeaters.isEmpty ? .empty : .loaded
-                }
-            } catch {
-                await MainActor.run {
-                    self.repeaterFetchState = .error(error.localizedDescription)
-                }
-            }
-        }
-    }
-
-    nonisolated private func fetchRepeaterBookHTML(_ urlString: String) async throws -> [Repeater] {
-        guard let url = URL(string: urlString) else { return [] }
-        var request = URLRequest(url: url)
-        request.setValue("KV4P-HT/1.0", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let html = String(data: data, encoding: .utf8) else { return [] }
-        return parseRepeaterBookHTML(html)
-    }
-
-    nonisolated private func parseRepeaterBookHTML(_ html: String) -> [Repeater] {
-        var results: [Repeater] = []
-        let rowPattern = try! NSRegularExpression(pattern: "<tr[^>]*>(.*?)</tr>", options: .dotMatchesLineSeparators)
-        let cellPattern = try! NSRegularExpression(pattern: "<td[^>]*>(.*?)</td>", options: .dotMatchesLineSeparators)
-        let tagPattern = try! NSRegularExpression(pattern: "<[^>]+>", options: [])
-
-        let rowMatches = rowPattern.matches(in: html, range: NSRange(html.startIndex..., in: html))
-        for rowMatch in rowMatches {
-            guard let rowRange = Range(rowMatch.range(at: 1), in: html) else { continue }
-            let rowHTML = String(html[rowRange])
-            let cellMatches = cellPattern.matches(in: rowHTML, range: NSRange(rowHTML.startIndex..., in: rowHTML))
-            guard cellMatches.count >= 10 else { continue }
-
-            func cellText(_ idx: Int) -> String {
-                guard idx < cellMatches.count,
-                      let r = Range(cellMatches[idx].range(at: 1), in: rowHTML) else { return "" }
-                let raw = String(rowHTML[r])
-                return tagPattern.stringByReplacingMatches(in: raw, range: NSRange(raw.startIndex..., in: raw), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-
-            guard let freq = Float(cellText(1)) else { continue }
-
-            let offsetStr = cellText(2).replacingOccurrences(of: " MHz", with: "")
-            let offset = Float(offsetStr) ?? 0
-            let toneStr = cellText(3)
-            let tone = Float(toneStr) ?? 0
-            let callsign = cellText(4)
-            let city = cellText(5)
-            let state = cellText(6)
-            let location = state.isEmpty ? city : "\(city), \(state)"
-            let miles = Float(cellText(9)) ?? 0
-
-            results.append(Repeater(
-                name: "\(callsign) · \(city)",
-                callsign: callsign,
-                freq: freq,
-                offset: offset,
-                plTone: tone,
-                distanceMi: miles,
-                location: location
-            ))
-        }
-        return results
-    }
-
-    func importRepeater(_ rep: Repeater, group: String) {
-        let mem = Memory(
-            name: rep.name,
-            group: group,
-            freq: rep.freq,
-            offset: rep.offset,
-            plTone: rep.plTone,
-            squelch: 2,
-            isRepeater: rep.offset != 0
-        )
-        memories.append(mem)
-    }
-
-    func importAllRepeaters(group: String) {
-        for rep in repeaters {
-            importRepeater(rep, group: group)
-        }
     }
 
     private func saveMemories() {
@@ -766,7 +656,3 @@ enum RadioRxState {
     }
 }
 
-enum RepeaterFetchState: Equatable {
-    case idle, loading, loaded, empty
-    case error(String)
-}
