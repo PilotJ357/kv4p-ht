@@ -98,6 +98,8 @@ private struct VFOBody: View {
         // Memory match supplies only name/description; freq, offset, and
         // tone always display firmware-applied state.
         let matched = store.memory(for: store.currentFreq)
+        // Band from HELLO (0 = VHF, else UHF); omit until the module reports.
+        let band = store.ble.hello.map { $0.rfModuleType == 0 ? "VHF · " : "UHF · " } ?? ""
         RadioStage(
             store:        store,
             channelName:  matched?.name ?? store.currentFreqString,
@@ -105,7 +107,7 @@ private struct VFOBody: View {
             freq:         store.currentFreqString,
             offset:       store.currentOffsetString,
             tone:         store.currentToneString,
-            modeLabel:    "VHF · VFO",
+            modeLabel:    band + "VFO",
             freqEditable: true,
             showCaptions: $showCaptions
         )
