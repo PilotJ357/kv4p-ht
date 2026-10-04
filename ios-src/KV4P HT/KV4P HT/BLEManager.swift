@@ -94,7 +94,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
         central.scanForPeripherals(withServices: [BLE_KISS_SERVICE_UUID],
                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
-        log("Scanning for KV4P-HT...")
+        log("Scanning for KV4P BLE radios...")
     }
 
     func stopScan() {

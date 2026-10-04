@@ -13,7 +13,7 @@ struct DeviceStrip: View {
     var connected: Bool
     var demo: Bool = false
     var battery: Int? = nil   // nil = no data from device yet
-    var label: String = "kv4p HT"
+    var label: String = "KV4P BLE"
     var action: () -> Void = {}
 
     private var dotColor: Color { !connected ? t.red : demo ? t.amber : t.green }

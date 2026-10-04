@@ -42,7 +42,7 @@ nonisolated enum CaptionsStatus: Equatable {
         case .needsPermission:
             return "Allow speech recognition to see live captions."
         case .denied:
-            return "Speech recognition access is off for kv4p HT. Turn it on in Settings to see live captions."
+            return "Speech recognition access is off for BLE HT. Turn it on in Settings to see live captions."
         case .restricted:
             return "Speech recognition is restricted on this device."
         case .unavailable:
