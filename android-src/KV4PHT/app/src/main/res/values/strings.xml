@@ -8,6 +8,7 @@
     <string name="second_fragment_label">Second Fragment</string>
 
     <string name="voice_display">Voice</string>
+    <string name="freedv_2400b_display">2400B</string>
     <string name="aprs_chat_display">APRS chat</string>
     <string name="memory_name_display">Memory name</string>
     <string name="memory_group_optional_display">Memory group (optional)</string>
@@ -48,7 +49,6 @@
     <string name="aprs_to_placeholder">Callsign</string>
     <string name="cq" translatable="false">CQ</string>
     <string name="aprs_relay_via">via</string>
-    <string name="visualization_of_current_transmit_audio_volume" translatable="false">Visualization of current transmit audio volume</string>
     <string name="squelch">Squelch</string>
     <string name="filters">Filters</string>
     <string name="accessibility">Accessibility</string>
@@ -110,6 +110,16 @@
     <string name="freq_145_1750" translatable="false">145.1750</string>
     <string name="freq_145_8250" translatable="false">145.8250</string>
     <string name="aprs_my_position_icon">My position icon</string>
+    <string name="aprs_message_filter">Message filter</string>
+    <string name="aprs_show_all">Show all</string>
+    <string name="aprs_only_mine">Only mine</string>
+    <string name="aprs_delivery_pending">Message awaiting acknowledgment</string>
+    <string name="aprs_delivery_delivered">Message acknowledged</string>
+    <string name="aprs_delivery_rejected">Message rejected</string>
+    <string name="aprs_delivery_failed">Message delivery failed</string>
+    <string name="aprs_digipeated">Digipeated</string>
+    <string name="all">All</string>
+    <string name="mine">Mine</string>
     <string name="aprs_icon_phone">Phone</string>
     <string name="aprs_icon_person">Person</string>
     <string name="aprs_icon_house">House</string>
@@ -127,10 +137,14 @@
     <string name="aprs_icon_sailboat">Sailboat</string>
     <string name="aprs_icon_motorboat">Motorboat</string>
     <string name="digipeat_packets">Digipeat (mesh)</string>
+    <string name="aprs_igate_rf_to_is">iGate (report RF messages online)</string>
+    <string name="aprs_is_display">Show nearby APRS-IS messages</string>
     <string name="wide" translatable="false">25kHz</string>
     <string name="narrow" translatable="false">12.5kHz</string>
     <string name="done">Done</string>
     <string name="sticky_ptt" translatable="false">Sticky PTT</string>
+    <string name="module_state_squelched">SQL</string>
+    <string name="module_state_tx">TX</string>
     <string name="find_repeaters_menu_item">Find nearby repeaters</string>
     <string name="flash_firmware_menu_item">Flash firmware</string>
     <string name="find_repeaters_title">Find nearby repeaters</string>
@@ -142,8 +156,15 @@
         <item>High</item>
         <item>Low</item>
     </string-array>
+    <string name="voice_mode">Voice mode</string>
+    <string-array name="voice_mode_options">
+        <item>Analog</item>
+        <item>FreeDV 2400B</item>
+    </string-array>
     <string name="mhz">MHz</string>
     <string name="flash_firmware_title">Flash firmware?</string>
     <string name="flash_firmware_message">This will replace the firmware on your kv4p HT.</string>
     <string name="flash_firmware_button">Flash</string>
+    <string name="firmware_flash_requires_usb">Connect the radio by USB to flash firmware</string>
+    <string name="aprs_message_not_accepted">APRS message was not accepted for transmission.</string>
 </resources>

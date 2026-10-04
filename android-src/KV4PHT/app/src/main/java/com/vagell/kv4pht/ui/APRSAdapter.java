@@ -18,34 +18,116 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 package com.vagell.kv4pht.ui;
 
-import static androidx.core.content.ContextCompat.startActivity;
-
 import android.content.Intent;
-import android.icu.text.SimpleDateFormat;
+import android.icu.util.LocaleData;
+import android.icu.util.ULocale;
 import android.net.Uri;
-import android.util.Log;
+import android.os.Build;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
+import androidx.core.text.util.LocalePreferences;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.vagell.kv4pht.R;
-import com.vagell.kv4pht.data.APRSMessage;
+import io.github.dkaukov.aprs.AprsEvent;
+import com.vagell.kv4pht.data.AprsFeedRow;
 
 import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder> {
-    public List<APRSMessage> aprsMessageList;
+    private static final DateTimeFormatter TIMESTAMP_FORMATTER =
+        DateTimeFormatter.ofPattern("h:mm a MMM d", Locale.ENGLISH)
+            .withZone(ZoneId.systemDefault());
+    public List<AprsFeedRow> aprsFeed;
+
+    static DeliveryStatusStyle deliveryStatusStyle(int deliveryState) {
+        switch (deliveryState) {
+            case AprsEvent.DELIVERY_PENDING:
+                return new DeliveryStatusStyle(R.drawable.ic_pending,
+                    R.string.aprs_delivery_pending, R.color.primary_deselected);
+            case AprsEvent.DELIVERY_DELIVERED:
+                return new DeliveryStatusStyle(R.drawable.ic_check,
+                    R.string.aprs_delivery_delivered, R.color.primary);
+            case AprsEvent.DELIVERY_REJECTED:
+                return new DeliveryStatusStyle(R.drawable.ic_rejected,
+                    R.string.aprs_delivery_rejected, R.color.accent);
+            case AprsEvent.DELIVERY_FAILED:
+                return new DeliveryStatusStyle(R.drawable.ic_failed,
+                    R.string.aprs_delivery_failed, R.color.accent);
+            case AprsEvent.DELIVERY_NONE:
+            default:
+                return null;
+        }
+    }
+
+    static boolean showCommentInFeed(int eventType) {
+        return eventType != AprsEvent.POSITION_TYPE;
+    }
+
+    static String mapLabel(AprsEvent event) {
+        if (event.getType() == AprsEvent.OBJECT_TYPE) {
+            return AprsObjectSummary.from(event.getObjectName(), event.getComment()).mapLabel;
+        }
+        String name = trimmed(event.getFromCallsign());
+        String description = trimmed(event.getComment());
+        if (name.isEmpty()) return description;
+        if (description.isEmpty()) return name;
+        return name + ": " + description;
+    }
+
+    private static String trimmed(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    static double fahrenheitToCelsius(double fahrenheit) {
+        return (fahrenheit - 32.0) * 5.0 / 9.0;
+    }
+
+    static double fahrenheitToKelvin(double fahrenheit) {
+        return fahrenheitToCelsius(fahrenheit) + 273.15;
+    }
+
+    static double milesPerHourToKilometresPerHour(double milesPerHour) {
+        return milesPerHour * 1.609344;
+    }
+
+    static boolean usesMilesPerHour(Locale locale) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            LocaleData.MeasurementSystem system = LocaleData.getMeasurementSystem(
+                ULocale.forLocale(locale));
+            return system == LocaleData.MeasurementSystem.US
+                || system == LocaleData.MeasurementSystem.UK;
+        }
+        String country = locale.getCountry();
+        return "US".equals(country) || "GB".equals(country)
+            || "LR".equals(country) || "MM".equals(country);
+    }
+
+    static final class DeliveryStatusStyle {
+        final int drawable;
+        final int description;
+        final int color;
+
+        DeliveryStatusStyle(int drawable, int description, int color) {
+            this.drawable = drawable;
+            this.description = description;
+            this.color = color;
+        }
+    }
 
     public APRSAdapter() {
-        this.aprsMessageList = new ArrayList<>();
+        this.aprsFeed = new ArrayList<>();
     }
 
     @NonNull
@@ -54,19 +136,23 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
         View itemView = null;
 
         switch (viewType) {
-            case APRSMessage.MESSAGE_TYPE:
+            case AprsEvent.MESSAGE_TYPE:
                 itemView = LayoutInflater.from(parent.getContext()).inflate(R.layout.aprs_message, parent, false);
                 break;
-            case APRSMessage.OBJECT_TYPE:
+            case AprsEvent.OBJECT_TYPE:
                 itemView = LayoutInflater.from(parent.getContext()).inflate(R.layout.aprs_object, parent, false);
                 break;
-            case APRSMessage.POSITION_TYPE:
+            case AprsEvent.POSITION_TYPE:
                 itemView = LayoutInflater.from(parent.getContext()).inflate(R.layout.aprs_position, parent, false);
                 break;
-            case APRSMessage.WEATHER_TYPE:
+            case AprsEvent.WEATHER_TYPE:
                 itemView = LayoutInflater.from(parent.getContext()).inflate(R.layout.aprs_weather, parent, false);
                 break;
-            case APRSMessage.UNKNOWN_TYPE:
+            case AprsEvent.STATUS_TYPE:
+            case AprsEvent.STATION_CAPABILITIES_TYPE:
+                itemView = LayoutInflater.from(parent.getContext()).inflate(R.layout.aprs_status, parent, false);
+                break;
+            case AprsEvent.UNKNOWN_TYPE:
             default:
                 itemView = LayoutInflater.from(parent.getContext()).inflate(R.layout.aprs_unknown, parent, false);
         }
@@ -74,67 +160,87 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
         return new APRSViewHolder(itemView);
     }
 
-    public void setAPRSMessageList(List<APRSMessage> aprsMessageList) {
-        this.aprsMessageList = aprsMessageList;
+    public void setAprsFeed(List<AprsFeedRow> aprsFeed) {
+        this.aprsFeed = aprsFeed;
+    }
+
+    public String getFeedKey(int position) {
+        return aprsFeed != null && position >= 0 && position < aprsFeed.size()
+            ? aprsFeed.get(position).feedKey : null;
+    }
+
+    public int findFeedPosition(String feedKey) {
+        if (aprsFeed != null && feedKey != null) {
+            for (int i = 0; i < aprsFeed.size(); i++) {
+                if (feedKey.equals(aprsFeed.get(i).feedKey)) return i;
+            }
+        }
+        return RecyclerView.NO_POSITION;
     }
 
     @Override
     public int getItemViewType(int position) {
-        return aprsMessageList.get(position).type;
+        return aprsFeed.get(position).event.getType();
     }
 
     @Override
     public void onBindViewHolder(@NonNull APRSViewHolder holder, int position) {
-        final APRSMessage aprsMessage = aprsMessageList.get(position);
+        final AprsEvent aprsEvent = aprsFeed.get(position).event;
 
         // Some default values any message type can have
-        holder.setFromCallsign(aprsMessage.fromCallsign);
-        holder.setTimestamp(aprsMessage.timestamp);
-        holder.setComment(aprsMessage.comment);
-        holder.setPositionLat(aprsMessage.positionLat);
-        holder.setPositionLong(aprsMessage.positionLong);
+        holder.setFromCallsign(aprsEvent.getFromCallsign());
+        holder.setTimestamp(aprsEvent.getFirstSeenMs());
+        holder.setComment(showCommentInFeed(aprsEvent.getType()) ? aprsEvent.getComment() : null);
+        holder.setPositionLat(aprsEvent.getPositionLat());
+        holder.setPositionLong(aprsEvent.getPositionLong());
+        holder.setDigipeated(aprsEvent.isDigipeated());
 
         // Specialized values
-        switch (aprsMessage.type) {
-            case APRSMessage.WEATHER_TYPE:
-                holder.setTemperature(aprsMessage.temperature);
-                holder.setHumidity(aprsMessage.humidity);
-                holder.setPressure(aprsMessage.pressure);
-                holder.setRain(aprsMessage.rain);
-                holder.setSnow(aprsMessage.snow);
-                holder.setWindForce(aprsMessage.windForce);
-                holder.setWindDir(aprsMessage.windDir);
+        switch (aprsEvent.getType()) {
+            case AprsEvent.WEATHER_TYPE:
+                holder.setTemperature(aprsEvent.getTemperature());
+                holder.setHumidity(aprsEvent.getHumidity());
+                holder.setPressure(aprsEvent.getPressure());
+                holder.setRain(aprsEvent.getRain());
+                holder.setSnow(aprsEvent.getSnow());
+                holder.setWindForce(aprsEvent.getWindForce());
+                holder.setWindDir(aprsEvent.getWindDirection());
                 break;
-            case APRSMessage.MESSAGE_TYPE:
-                holder.setToCallsign(aprsMessage.toCallsign);
-                holder.setMsgBody(aprsMessage.msgBody);
-                holder.setWasAcknowledged(aprsMessage.wasAcknowledged);
+            case AprsEvent.MESSAGE_TYPE:
+                holder.setToCallsign(aprsEvent.getToCallsign());
+                holder.setMsgBody(aprsEvent.getBody());
+                holder.setDeliveryState(aprsEvent.getDeliveryState());
                 break;
-            case APRSMessage.OBJECT_TYPE:
-                holder.setObjName(aprsMessage.objName);
+            case AprsEvent.OBJECT_TYPE:
+                holder.setObjName(aprsEvent.getObjectName());
+                holder.setComment(AprsObjectSummary.from(
+                    aprsEvent.getObjectName(), aprsEvent.getComment()).cardText);
                 break;
-            case APRSMessage.POSITION_TYPE: // Can only have default values
-            case APRSMessage.UNKNOWN_TYPE: // Ditto
+            case AprsEvent.POSITION_TYPE: // Can only have default values
+            case AprsEvent.STATUS_TYPE: // Ditto
+            case AprsEvent.STATION_CAPABILITIES_TYPE: // Ditto
+            case AprsEvent.UNKNOWN_TYPE: // Ditto
+                break;
+            default:
                 break;
         }
-        holder.setRelayCallsign(aprsMessage.relayCallsign);
+        holder.setRelayCallsign(aprsEvent.getRelayCallsign());
 
         // Handle taps on the message's position icon
         final View positionButton = holder.itemView.findViewById(R.id.senderPositionButton);
-        positionButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                // Show this location on a map
-                String geoUri = "geo:" + aprsMessage.positionLat + "," + aprsMessage.positionLong + "?q=" + aprsMessage.positionLat + "," + aprsMessage.positionLong;
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(geoUri));
-                v.getContext().startActivity(intent);
-            }
+        positionButton.setOnClickListener(v -> {
+            String coordinates = aprsEvent.getPositionLat() + "," + aprsEvent.getPositionLong();
+            String label = mapLabel(aprsEvent);
+            String mapQuery = label.isEmpty() ? coordinates : coordinates + " (" + label + ")";
+            String geoUri = "geo:" + coordinates + "?q=" + Uri.encode(mapQuery);
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(geoUri));
+            v.getContext().startActivity(intent);
         });
     }
 
     @Override
     public int getItemCount() {
-        return aprsMessageList.size();
+        return aprsFeed.size();
     }
 
     static class APRSViewHolder extends RecyclerView.ViewHolder {
@@ -143,18 +249,21 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
         TextView textViewComment;
         View senderPositionButton;
         TextView textViewTemperature;
+        TextView textViewTemperatureUnit;
         TextView textViewHumidity;
         TextView textViewPressure;
         TextView textViewRain;
         TextView textViewSnow;
         TextView textViewWindForce;
+        TextView textViewWindUnit;
         TextView textViewWindDir;
         TextView textViewToCallsign;
         TextView textViewMsgBody;
-        View ackIcon;
+        ImageView deliveryStatusIcon;
         TextView textViewObjName;
         TextView textViewRelayCallsign;
         TextView textViewRelayViaLabel;
+        TextView textViewDigipeated;
 
         public APRSViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -166,18 +275,21 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
             textViewComment = itemView.findViewById(R.id.comment);
             senderPositionButton = itemView.findViewById(R.id.senderPositionButton);
             textViewTemperature = itemView.findViewById(R.id.temperature);
+            textViewTemperatureUnit = itemView.findViewById(R.id.temperatureUnit);
             textViewHumidity = itemView.findViewById(R.id.humidity);
             textViewPressure = itemView.findViewById(R.id.pressure);
             textViewRain = itemView.findViewById(R.id.rain);
             textViewSnow = itemView.findViewById(R.id.snow);
             textViewWindForce = itemView.findViewById(R.id.wind);
+            textViewWindUnit = itemView.findViewById(R.id.windUnit);
             textViewWindDir = itemView.findViewById(R.id.windDirection);
             textViewToCallsign = itemView.findViewById(R.id.toCallsign);
             textViewMsgBody = itemView.findViewById(R.id.messageBody);
-            ackIcon = itemView.findViewById(R.id.msgAck);
+            deliveryStatusIcon = itemView.findViewById(R.id.messageDeliveryStatus);
             textViewObjName = itemView.findViewById(R.id.objName);
             textViewRelayCallsign = itemView.findViewById(R.id.relayCallsign);
             textViewRelayViaLabel = itemView.findViewById(R.id.relayViaLabel);
+            textViewDigipeated = itemView.findViewById(R.id.digipeatedIndicator);
         }
 
         public void setFromCallsign(String fromCallsign) {
@@ -191,16 +303,14 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
             if (null == textViewTimestamp) {
                 return;
             }
-            Calendar calendar = Calendar.getInstance();
-            SimpleDateFormat sdf = new SimpleDateFormat("h:mm a MMM d", Locale.ENGLISH);
-            textViewTimestamp.setText(sdf.format(new Date(timestamp * 1000)));
+            textViewTimestamp.setText(TIMESTAMP_FORMATTER.format(Instant.ofEpochMilli(timestamp)));
         }
 
         public void setComment(String comment) {
             if (null == textViewComment) {
                 return;
             }
-            if (null == comment || comment.trim().length() == 0) {
+            if (null == comment || comment.trim().isEmpty()) {
                 itemView.findViewById(R.id.commentHolder).setVisibility(View.GONE);
             } else {
                 itemView.findViewById(R.id.commentHolder).setVisibility(View.VISIBLE);
@@ -216,18 +326,30 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
         }
 
         public void setPositionLat(double posLat) {
-            setHasPosition(posLat != 0 ? true : false);
+            setHasPosition(posLat != 0);
         }
 
         public void setPositionLong(double posLong) {
-            setHasPosition(posLong != 0 ? true : false);
+            setHasPosition(posLong != 0);
         }
 
         public void setTemperature(double temperature) {
             if (null == textViewTemperature) {
                 return;
             }
-            textViewTemperature.setText(String.format(Locale.US, "%.1f", temperature));
+            Locale locale = displayLocale();
+            String temperatureUnit = LocalePreferences.getTemperatureUnit(locale);
+            double displayTemperature = temperature;
+            String unit = "°F";
+            if (LocalePreferences.TemperatureUnit.CELSIUS.equals(temperatureUnit)) {
+                displayTemperature = fahrenheitToCelsius(temperature);
+                unit = "°C";
+            } else if (LocalePreferences.TemperatureUnit.KELVIN.equals(temperatureUnit)) {
+                displayTemperature = fahrenheitToKelvin(temperature);
+                unit = "K";
+            }
+            textViewTemperature.setText(String.format(locale, "%.1f", displayTemperature));
+            if (textViewTemperatureUnit != null) textViewTemperatureUnit.setText(unit);
         }
 
         public void setHumidity(double humidity) {
@@ -262,7 +384,21 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
             if (null == textViewWindForce) {
                 return;
             }
-            textViewWindForce.setText("" + windForce);
+            Locale locale = displayLocale();
+            boolean useMilesPerHour = usesMilesPerHour(locale);
+            double displaySpeed = useMilesPerHour ? windForce
+                : milesPerHourToKilometresPerHour(windForce);
+            textViewWindForce.setText(String.format(locale, "%.0f", displaySpeed));
+            if (textViewWindUnit != null) {
+                textViewWindUnit.setText(useMilesPerHour ? "mph" : "km/h");
+            }
+        }
+
+        private Locale displayLocale() {
+            if (!itemView.getResources().getConfiguration().getLocales().isEmpty()) {
+                return itemView.getResources().getConfiguration().getLocales().get(0);
+            }
+            return Locale.getDefault();
         }
 
         public void setWindDir(String windDir) {
@@ -286,11 +422,20 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
             textViewMsgBody.setText(msgBody);
         }
 
-        public void setWasAcknowledged(boolean ack) {
-            if (null == ackIcon) {
+        public void setDeliveryState(int deliveryState) {
+            if (deliveryStatusIcon == null) return;
+            DeliveryStatusStyle style = deliveryStatusStyle(deliveryState);
+            if (style == null) {
+                deliveryStatusIcon.setVisibility(View.GONE);
+                deliveryStatusIcon.setContentDescription(null);
                 return;
             }
-            ackIcon.setVisibility(ack ? View.VISIBLE : View.GONE);
+            deliveryStatusIcon.setImageResource(style.drawable);
+            deliveryStatusIcon.setColorFilter(
+                ContextCompat.getColor(itemView.getContext(), style.color));
+            deliveryStatusIcon.setContentDescription(
+                itemView.getContext().getString(style.description));
+            deliveryStatusIcon.setVisibility(View.VISIBLE);
         }
 
         public void setObjName(String objName) {
@@ -301,20 +446,14 @@ public class APRSAdapter extends RecyclerView.Adapter<APRSAdapter.APRSViewHolder
         }
 
         public void setRelayCallsign(String relayCallsign) {
-            /* TODO(vagell): The relay callsign UI is disabled for now. Reconsider this in the future,
-                although it works, it makes the status line of messages super long and hard to read,
-                and i'm not sure most people will understand "via" means via inet iGate vs. RF digipeat.
-            if (null == textViewRelayCallsign) {
-                return;
-            }
-            if (null == relayCallsign) {
-                textViewRelayCallsign.setVisibility(View.GONE);
-                textViewRelayViaLabel.setVisibility(View.GONE);
-            } else {
-                textViewRelayCallsign.setVisibility(View.VISIBLE);
-                textViewRelayCallsign.setText(relayCallsign);
-                textViewRelayViaLabel.setVisibility(View.VISIBLE);
-            } */
+            // Relay callsigns are intentionally not displayed: they make the status line hard to read.
         }
+
+        public void setDigipeated(boolean digipeated) {
+            if (textViewDigipeated != null) {
+                textViewDigipeated.setVisibility(digipeated ? View.VISIBLE : View.GONE);
+            }
+        }
+
     }
 }

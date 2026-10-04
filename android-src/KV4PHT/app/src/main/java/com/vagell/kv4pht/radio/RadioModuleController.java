@@ -45,6 +45,10 @@ public class RadioModuleController {
             | Protocol.HOST_STATE_FILTER_HIGH
             | Protocol.HOST_STATE_FILTER_LOW
             | Protocol.HOST_STATE_TX_ALLOWED
+            | Protocol.HOST_STATE_ENABLE_STATUS_REPORTS
+            | Protocol.HOST_STATE_FREEDV_2400B;
+    private static final int SESSION_FLAGS_MASK =
+        Protocol.HOST_STATE_RX_AUDIO_OPEN
             | Protocol.HOST_STATE_ENABLE_STATUS_REPORTS;
     private static final int DEFAULT_DESIRED_FLAGS =
         Protocol.HOST_STATE_HIGH_POWER | Protocol.HOST_STATE_RSSI_ENABLED | Protocol.HOST_STATE_ENABLE_STATUS_REPORTS;
@@ -210,9 +214,30 @@ public class RadioModuleController {
         setDesiredFlag(Protocol.HOST_STATE_TX_ALLOWED, allowed);
     }
 
+    public synchronized boolean supportsFreeDv2400b() {
+        return firmwareVersion != null && firmwareVersion.isHasFreeDv2400b();
+    }
+
+    public synchronized void setFreeDv2400b(boolean enabled) {
+        setDesiredFlag(Protocol.HOST_STATE_FREEDV_2400B, enabled && supportsFreeDv2400b());
+    }
+
+    public synchronized boolean isFreeDv2400bEnabled() {
+        return (desiredState.getFlags() & Protocol.HOST_STATE_FREEDV_2400B) != 0;
+    }
+
     synchronized void updateDeviceState(Protocol.DeviceState state) {
         lastPhysPttDown = isPhysPttDown();
         lastDeviceState = state;
+        if (state.getAppliedSequence() > desiredState.getSequence()) {
+            boolean hadUnsentChange = lastDesiredStateSent != null && !desiredState.equals(lastDesiredStateSent);
+            Protocol.HostDesiredState syncedState = desiredFromDeviceState(state);
+            desiredState = syncedState.withFlags((syncedState.getFlags() & ~SESSION_FLAGS_MASK)
+                | (desiredState.getFlags() & SESSION_FLAGS_MASK));
+            if (!hadUnsentChange && lastDesiredStateSent != null) {
+                lastDesiredStateSent = desiredState;
+            }
+        }
         appliedStateInSync = isDeviceStateInSyncWithDesired(state, lastDesiredStateSent);
         if (appliedStateInSync) {
             desiredStateRetries = 0;
@@ -309,8 +334,8 @@ public class RadioModuleController {
         return lastDeviceState != null ? lastDeviceState.getCtcssRx() & 0xFF : 0;
     }
 
-    synchronized int getSMeter9Value() {
-        return Protocol.calculateSMeter9Value(lastDeviceState != null ? lastDeviceState.getLatestRssi() : 0);
+    synchronized int getSMeterBarValue() {
+        return Protocol.calculateSMeterValue(lastDeviceState != null ? lastDeviceState.getLatestRssi() : 0);
     }
 
     synchronized boolean isPhysPttDown() {
@@ -323,6 +348,18 @@ public class RadioModuleController {
 
     synchronized boolean isDeviceTxActive() {
         return lastDeviceState != null && Protocol.DeviceMode.DEVICE_MODE_TX.equals(lastDeviceState.getMode());
+    }
+
+    synchronized byte getDesiredBandwidth() {
+        return desiredState.getBw();
+    }
+
+    synchronized float getDesiredTxFrequency() {
+        return desiredState.getFreqTx();
+    }
+
+    synchronized byte getDesiredTxTone() {
+        return desiredState.getCtcssTx();
     }
 
     synchronized boolean didPhysPttChange() {

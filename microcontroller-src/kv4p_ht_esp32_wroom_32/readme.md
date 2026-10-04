@@ -4,28 +4,40 @@
 
 The KV4P-HT protocol defines the communication interface between the microcontroller and external systems. It specifies message structures and command types for data exchange.
 
-## Protocol Version
+## Protocol Changelog
 
-* **Current Version:** 2.2
-* **Changelog:**
-  * Serial transport now uses KV4P KISS framing. The old `0xDEADBEEF` delimiter and top-level length field are removed.
-  * Standard KISS DATA frames carry AX.25 packets directly.
-  * kv4p-specific commands are carried in KISS SETHARDWARE vendor frames with payload prefix `"KV4P"` and protocol version `1`.
-  * `COMMAND_HELLO` now carries the version/status payload after firmware radio initialization completes.
-  * Android now sends `COMMAND_HOST_DESIRED_STATE` snapshots for radio config, filters, PTT, audio-open, high-power, and RSSI state.
-  * Firmware replies with `COMMAND_DEVICE_STATE` snapshots describing applied state.
-  * Firmware coalesces state changes through a dirty flag; `deviceStateLoop()` is the single state-report sender.
-  * Android retries an unacknowledged desired-state snapshot by resending the same sequence.
-  * Live voice audio uses 16 kHz 4-bit ADPCM payloads.
-  * Legacy one-shot control commands were removed.
- 
-* **Historical 2.1 changelog:**
-  * Initial version with core command set.
-  * Parameter length field upgraded from 1 byte to 2 bytes (`uint16_t`).
-  * Added `COMMAND_WINDOW_UPDATE` **(ESP32 → Android)**.
-  * Version/status payload includes `windowSize`, **`rfModuleType`**, and **`features`**.
-  * Audio streams are now Opus encoded.
-  * Window-based flow control implemented for all incoming commands, inspired by HTTP/2.
+### v2.0.0.2 (Unreleased, FW: 17)
+
+* Live voice audio changed from Opus on command `0x07` to 16 kHz 4-bit ADPCM on command `0x0C`.
+* Added FreeDV 2400B digital voice negotiation with `FEATURE_HAS_FREEDV_2400B` and `HOST_STATE_FREEDV_2400B`. When enabled, 7-byte Codec2 1300 frames use `COMMAND_HOST_TX_DIGITAL` and `COMMAND_RX_DIGITAL` (`0x0E`) instead of ADPCM audio.
+* Added standard KISS `TXDELAY`, `PERSIST`, and `SLOTTIME` controls. Firmware performs CSMA/p-persistence channel access and queues up to two outbound AX.25 KISS DATA frames.
+* Added `COMMAND_HOST_TX_AX25` (`0x0F`) for AX.25 transmission with a temporary TX frequency, bandwidth, and CTCSS configuration.
+
+### v2.0.0.0 (FW: 17)
+
+* Serial transport now uses KV4P KISS framing. The old `0xDEADBEEF` delimiter and top-level length field are removed.
+* Standard KISS DATA frames carry AX.25 packets directly.
+* kv4p-specific commands are carried in KISS SETHARDWARE vendor frames with payload prefix `"KV4P"` and protocol version `1`.
+* `COMMAND_HELLO` now carries the version/status payload after firmware radio initialization completes.
+* Android now sends `COMMAND_HOST_DESIRED_STATE` snapshots for radio config, filters, PTT, audio-open, high-power, and RSSI state.
+* Firmware replies with `COMMAND_DEVICE_STATE` snapshots describing applied state.
+* Legacy one-shot control commands were removed.
+
+### v1.9.4 (FW: 14)
+
+* Added `COMMAND_HOST_HL` (`0x08`) and `COMMAND_HOST_RSSI` (`0x09`).
+* Changed the `COMMAND_HOST_CONFIG` payload from a radio-type byte to an `isHigh` boolean.
+* Replaced the hardware field in the version payload with `rfModuleType` and a `features` bitmask.
+* Added feature bits for high/low power control and physical PTT support.
+
+### v1.8.0 (FW: 13)
+
+* Introduced the unified framed host/firmware protocol and core command set in `protocol.h`.
+* Frames use the four-byte `0xDEADBEEF` delimiter, a command byte, and a two-byte (`uint16_t`) payload length.
+* Added `COMMAND_WINDOW_UPDATE` **(ESP32 → Android)**.
+* The version payload includes firmware version, radio status, hardware version, and `windowSize`.
+* Live voice audio uses Opus on command `0x07` in both directions.
+* Window-based flow control applies to incoming commands.
 
 ## Packet Structure
 
@@ -67,7 +79,25 @@ All other bytes are written unchanged. The old `0xDEADBEEF` delimiter and top-le
 | KISS Command | Name                   | Description                       |
 | ------------ | ---------------------- | --------------------------------- |
 | `0x00`       | KISS DATA frame        | Transmit AX.25 packet bytes       |
+| `0x01`       | KISS TXDELAY            | Set TX lead time in 10 ms units   |
+| `0x02`       | KISS PERSIST            | Set p-persistence probability     |
+| `0x03`       | KISS SLOTTIME           | Set CSMA slot time in 10 ms units |
 | `0x06`       | KISS SETHARDWARE frame | Carry a kv4p vendor command frame |
+
+Firmware queues exactly two outbound AX.25 jobs in FIFO order. A job waits for a clear carrier,
+then immediately makes a PERSIST decision. A failed decision waits SLOTTIME before sensing again;
+a busy channel restarts CSMA without blocking normal firmware work. A third job is dropped, so the
+higher-level protocol/application must retry or pace traffic. Adjacent ordinary KISS DATA jobs are
+sent under one PTT assertion after winning CSMA; frequency-override jobs are sent separately.
+Defaults are TXDELAY 650 ms, PERSIST 63, and SLOTTIME 100 ms. TXDELAY currently uses the modem's
+fixed flag preamble plus configurable carrier silence; the bundled esp32-afsk API cannot set a
+variable flag preamble at runtime.
+TXDELAY and SLOTTIME are one-byte 10 ms values (65 and 10 by default); PERSIST is a
+one-byte p-persistence probability value from 0 to 255 (63 by default).
+
+Channel busy is `ourTx || afskDcd || rfCarrierDetected`. `afskDcd` is the qualified AFSK flag
+detector. `rfCarrierDetected` is SoftSQ's raw HF-noise decision, independent of CTCSS and UI
+squelch settings.
 
 ## Incoming KV4P Vendor Commands (Android → ESP32)
 
@@ -77,6 +107,14 @@ Audio command ID `0x07` was used by the historical Opus voice stream. Current fi
 | ------------ | ----------------------- | -------------------------------------------------------------- |
 | `0x0C`       | `COMMAND_HOST_TX_AUDIO` | Receive Tx 4-bit ADPCM audio data (payload required, flow-controlled) |
 | `0x0D`       | `COMMAND_HOST_DESIRED_STATE` | Desired radio/control state snapshot                     |
+| `0x0E`       | `COMMAND_HOST_TX_DIGITAL` | Receive one 7-byte Codec2 1300 frame for FreeDV 2400B    |
+| `0x0F`       | `COMMAND_HOST_TX_AX25` | Queue an AX.25 job with temporary TX configuration |
+
+`COMMAND_HOST_TX_AX25` payload is packed as `float freqTx`, `uint8 bw`, `uint8 ctcssTx`, then
+the AX.25 bytes. Before CSMA, firmware temporarily tunes both RX and TX to the target frequency,
+waits 260 ms for the receiver and carrier detectors to settle, then senses and transmits on that
+target. This preparation occurs only while the radio is idle and host TX remains allowed.
+After its transmission, firmware restores the latest normal desired radio state.
 
 ## Outgoing KISS Frame Types (ESP32 → Android)
 
@@ -100,6 +138,7 @@ Audio command ID `0x07` was used by the historical Opus voice stream. Current fi
 | `0x0C`       | `COMMAND_RX_AUDIO`      | Sends Rx 4-bit ADPCM audio data (payload required) |
 | `0x09`       | `COMMAND_WINDOW_UPDATE` | Updates available receive window            |
 | `0x0B`       | `COMMAND_DEVICE_STATE`  | Applied radio/control state snapshot         |
+| `0x0E`       | `COMMAND_RX_DIGITAL`    | Sends one demodulated 7-byte Codec2 1300 frame |
 
 ## Command Parameters
 
@@ -121,6 +160,7 @@ typedef struct version Version;
 #define FEATURE_HAS_HL      (1 << 0)
 #define FEATURE_HAS_PHY_PTT (1 << 1)
 #define FEATURE_HAS_ESP32_AFSK (1 << 2)
+#define FEATURE_HAS_FREEDV_2400B (1 << 3)
 
 struct hello {
   Version     version;
@@ -157,6 +197,7 @@ typedef struct host_desired_state HostDesiredState;
 #define HOST_STATE_FILTER_LOW         (1 << 7)
 #define HOST_STATE_TX_ALLOWED          (1 << 11)
 #define HOST_STATE_ENABLE_STATUS_REPORTS (1 << 12)
+#define HOST_STATE_FREEDV_2400B          (1 << 13)
 ```
 
 Android sends the full desired-state snapshot whenever one field changes. Firmware applies changed radio/filter/control fields, derives its mode, and marks device state dirty so `deviceStateLoop()` can report the result with `COMMAND_DEVICE_STATE`.
@@ -164,6 +205,8 @@ Android sends the full desired-state snapshot whenever one field changes. Firmwa
 `HOST_STATE_TX_ALLOWED` is a persisted host-controlled safety flag that defaults off. Firmware only accepts transmit requests, including KISS DATA AX.25 frames and host PTT requests, while this flag is set.
 
 `HOST_STATE_ENABLE_STATUS_REPORTS` is a non-persisted session flag that defaults off. kv4p HT Android sets it after HELLO so firmware sends `COMMAND_DEVICE_STATE`; generic KISS TNC hosts can leave it off to receive only standard KISS DATA frames.
+
+`HOST_STATE_FREEDV_2400B` is a non-persisted global flag. When it and a session's `HOST_STATE_RX_AUDIO_OPEN` flag are set, firmware sends 7-byte Codec2 frames on `COMMAND_RX_DIGITAL` instead of ADPCM audio. During host-requested PTT, the host must continuously send 7-byte `COMMAND_HOST_TX_DIGITAL` frames. Each frame represents 320 speech samples at 8 kHz and 1,920 modem samples at 48 kHz (40 ms).
 
 Android treats `DeviceState.appliedSequence` as the acknowledgement for the latest desired-state snapshot. If received device state does not match the last sent desired snapshot, Android may retry the exact same `HostDesiredState` with the same `sequence`. Retries are bounded; they are not new logical state changes and must not increment `sequence`.
 

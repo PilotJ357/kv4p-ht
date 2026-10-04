@@ -26,6 +26,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
@@ -34,7 +35,9 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioRecord;
 import android.media.AudioTrack;
+import android.media.MediaRecorder;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
@@ -58,17 +61,22 @@ import com.google.android.gms.tasks.CancellationTokenSource;
 import com.hoho.android.usbserial.driver.UsbSerialDriver;
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 import com.hoho.android.usbserial.driver.UsbSerialProber;
-import com.hoho.android.usbserial.util.SerialInputOutputManager;
+import com.vagell.kv4pht.BuildConfig;
 import com.vagell.kv4pht.R;
-import com.vagell.kv4pht.aprs.parser.APRSIconType;
-import com.vagell.kv4pht.aprs.parser.APRSPacket;
-import com.vagell.kv4pht.aprs.parser.APRSTypes;
-import com.vagell.kv4pht.aprs.parser.Digipeater;
-import com.vagell.kv4pht.aprs.parser.MessagePacket;
-import com.vagell.kv4pht.aprs.parser.Parser;
-import com.vagell.kv4pht.aprs.parser.Position;
-import com.vagell.kv4pht.aprs.parser.PositionField;
+import io.github.dkaukov.aprs.AprsController;
+import io.github.dkaukov.aprs.BeaconData;
+import io.github.dkaukov.aprs.AprsEvent;
+import io.github.dkaukov.aprs.AprsIsClient;
+import io.github.dkaukov.aprs.AprsSource;
+import com.vagell.kv4pht.ui.APRSIconType;
+import io.github.dkaukov.aprs.parser.APRSPacket;
+import io.github.dkaukov.aprs.parser.Digipeater;
+import io.github.dkaukov.aprs.parser.Parser;
 import com.vagell.kv4pht.data.ChannelMemory;
+import com.vagell.kv4pht.data.AprsFeedRepository;
+import com.vagell.kv4pht.data.AprsFeedRow;
+import com.vagell.kv4pht.data.AppDatabase;
+import com.vagell.kv4pht.data.RoomAprsRepository;
 import com.vagell.kv4pht.firmware.FirmwareUtils;
 import com.vagell.kv4pht.javAX25.ax25.Packet;
 import com.vagell.kv4pht.radio.Protocol.KissParser;
@@ -76,21 +84,21 @@ import com.vagell.kv4pht.radio.Protocol.RcvCommand;
 import com.vagell.kv4pht.radio.Protocol.WindowUpdate;
 import com.vagell.kv4pht.ui.MainActivity;
 import com.vagell.kv4pht.ui.ToneHelper;
+import io.github.dkaukov.codec2.Codec2;
 import lombok.Getter;
 import lombok.Setter;
-
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Background service that manages the connection to the ESP32 (to control the radio), and
@@ -99,10 +107,16 @@ import java.util.concurrent.TimeUnit;
  * continues to play even if the phone's screen is off or the user starts another app.
  */
 public class RadioAudioService extends Service {
+    private static final String MEGAHERTZ = " MHz";
+    private static final String MEMORY_FREQUENCY_SUFFIX = MEGAHERTZ + ")";
+    private static final String SIMPLEX_PREFIX = "Simplex ";
+    private static final String CURRENT_FREQUENCY = "Current";
+    private static final String NOTIFICATION_CHANNEL_ID = "KV4P_HT_RADIO_AUDIO";
 
     // === Constants ===
     private static final String TAG = RadioAudioService.class.getSimpleName();
     private static final String FIRMWARE_TAG = "firmware";
+    private static final String APRS_TOCALL = "APKVPA";
     private static final String ACTION_USB_PERMISSION = "com.vagell.kv4pht.USB_PERMISSION";
     private static final int RUNAWAY_TX_TIMEOUT_SEC = 180;
     // Intents this Activity can handle besides the one that starts it in default mode.
@@ -132,7 +146,6 @@ public class RadioAudioService extends Service {
     public static final int APRS_POSITION_EXACT = 0;
     public static final int APRS_POSITION_APPROX = 1;
     public static final int APRS_BEACON_MINS = 5;
-    private static final int APRS_MAX_MESSAGE_NUM = 99999;
     public static final String MESSAGE_NOTIFICATION_CHANNEL_ID = "aprs_message_notifications";
     public static final int MESSAGE_NOTIFICATION_TO_YOU_ID = 0;
     public static final List<Digipeater> DEFAULT_DIGIPEATERS = List.of(new Digipeater("WIDE1-1"), new Digipeater("WIDE2-1"));
@@ -167,13 +180,28 @@ public class RadioAudioService extends Service {
     private AudioTrack audioTrack;
     private float audioTrackVolume = 0.0f;
     private AudioFocusRequest audioFocusRequest;
+    private boolean hasAudioFocus = false;
     private final byte[] txAudioFrame = new byte[AUDIO_FRAME_BYTES];
+    private final ImaAdpcm.Encoder txAudioEncoder = new ImaAdpcm.Encoder();
+    private Codec2 codec2;
+    private boolean freeDv2400bEnabled;
+    private final short[] codec2TxPcm = new short[Codec2.PCM_SAMPLES];
+    private final short[] codec2RxPcm = new short[Codec2.PCM_SAMPLES];
+    private final short[] codec2PlaybackPcm = new short[Codec2.PCM_SAMPLES * 2];
+    private final byte[] codec2Frame = new byte[Codec2.FRAME_BYTES];
+    private int codec2TxSamples;
+    private boolean codec2HasPendingInput;
+    private short codec2PendingInput;
+    private final AtomicReference<AudioRecord> audioRecord = new AtomicReference<>();
+    private volatile boolean voiceCaptureActive;
+    private final AtomicInteger voiceCaptureSession = new AtomicInteger();
+    private static final int TX_AUDIO_MIN_BUFFER_SIZE = Math.max(
+            AudioRecord.getMinBufferSize(AUDIO_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT), AUDIO_FRAME_SAMPLES * 2);
 
     // === USB / Serial ===
     private UsbManager usbManager;
-    @Getter
-    private UsbSerialPort serialPort;
-    private SerialInputOutputManager usbIoManager;
+    private RadioTransport activeTransport;
     private boolean usbPermissionRequestPending = false;
     @Getter
     private Protocol.Sender hostToEsp32;
@@ -184,16 +212,15 @@ public class RadioAudioService extends Service {
     private int activeUsbConnectAttemptId = 0;
 
     // === APRS State ===
-    private boolean aprsBeaconPosition = false;
-    private String aprsBeaconFrequency = "Current";
+    private String aprsBeaconFrequency = CURRENT_FREQUENCY;
+    // Confined to the ordered APRS worker while submitting one app-scheduled beacon.
+    private Float aprsBeaconTxOverrideMhz;
     @Getter
     @Setter
     private int aprsPositionAccuracy = APRS_POSITION_EXACT;
-    private boolean digipeatPackets = false;
-    private final java.util.Map<String, Long> digipeatDedupCache = new java.util.HashMap<>();
-    private ScheduledExecutorService beaconScheduler;
-    private ScheduledFuture<?> beaconFuture;
-    private int messageNumber = 0;
+    private AprsIsClient aprsIsClient;
+    private boolean aprsIgateEnabled;
+    private boolean aprsIsDisplayEnabled;
 
     // === Protocol Handshake ===
     private static final int HELLO_TIMEOUT_MS = 60000;
@@ -205,12 +232,12 @@ public class RadioAudioService extends Service {
     // === Radio State ===
     @Getter
     private @NonNull RadioMode mode = RadioMode.STARTUP;
-    @Setter
     private @NonNull String callsign = "";
     @Getter
     private @NonNull String activeFrequencyStr = "";
     private int activeMemoryId = -1;
     private int scanBaseSquelch = -1;
+    private static final int DEFAULT_SCAN_SQUELCH = 7;
     private Runnable pendingScanAdvance;
     private int pendingScanAdvanceMemoryId = -1;
     private MicGainBoost micGainBoost = MicGainBoost.NONE;
@@ -224,10 +251,16 @@ public class RadioAudioService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private static final long CONNECT_RETRY_PERIOD_MS = 500L;
     private final ConnectionController connectionController =
-        new ConnectionController(handler, CONNECT_RETRY_PERIOD_MS, this::isConnectionReady, this::attemptUsbConnect);
+        new ConnectionController(handler, CONNECT_RETRY_PERIOD_MS, this::reconcileConnections);
     private boolean radioMissingNotified = false;
     private Runnable txTimeoutHandler;
     private LiveData<List<ChannelMemory>> channelMemoriesLiveData = null;
+    private ScheduledExecutorService aprsExecutor;
+    private volatile boolean aprsBeaconPosition;
+    // Main-handler-owned scheduling preserves GPS and alternate-frequency beaconing.
+    private final AprsBeaconSchedule aprsBeaconSchedule = new AprsBeaconSchedule(APRS_BEACON_MINS * 60_000L);
+    private AprsController aprsController;
+    private AprsFeedRepository aprsFeedRepository;
 
     /**
      * Class used for the client Binder. This service always runs in the same process as its clients.
@@ -249,16 +282,17 @@ public class RadioAudioService extends Service {
         default void radioModuleHandshake() {}
         default void radioModuleNotFound() {}
         default void audioTrackCreated() {}
-        default void packetReceived(APRSPacket aprsPacket) {}
         default void startingAprsBeacon(String frequencyStr) {}
         default void scannedToMemory(int memoryId) {}
         default void tunedToFreq(String frequencyStr) {}
         default void outdatedFirmware(int firmwareVer) {}
         default void initialDeviceStateReceived() {}
+        default void radioConfigChanged() {}
         default void missingFirmware() {}
         default void txStarted() {}
         default void txEnded() {}
-        default void moduleTxStateChanged(boolean txActive) {}
+        default void moduleStateChanged(boolean txActive, boolean squelched) {}
+        default void freeDvModeChanged(boolean enabled) {}
         default void chatError(String text) {}
         default void sMeterUpdate(int value) {}
         default void sentAprsBeacon(double latitude, double longitude, String frequencyStr, boolean wasSwitch) {}
@@ -278,7 +312,7 @@ public class RadioAudioService extends Service {
         }
 
         // Retrieve necessary parameters from the intent.
-        callsign = Optional.ofNullable(bundle.getString("callsign")).orElse("");
+        setCallsign(Optional.ofNullable(bundle.getString("callsign")).orElse(""));
         if (bundle.containsKey("squelch")) {
             radioModule.seedDesiredSquelch(bundle.getInt("squelch"));
         }
@@ -292,14 +326,8 @@ public class RadioAudioService extends Service {
     }
 
     public void setAprsBeaconPosition(boolean enabled) {
-        if (this.aprsBeaconPosition != enabled) {
-            this.aprsBeaconPosition = enabled;
-            if (enabled) {
-                startBeaconScheduler();
-            } else if (beaconFuture != null) {
-                stopBeaconScheduler();
-            }
-        }
+        aprsBeaconPosition = enabled;
+        handler.post(() -> aprsBeaconSchedule.setEnabled(enabled));
     }
 
     public void setAprsBeaconFrequency(String frequency) {
@@ -307,71 +335,97 @@ public class RadioAudioService extends Service {
     }
 
     public void setDigipeatPackets(boolean enabled) {
-        this.digipeatPackets = enabled;
+        executeAprs(() -> aprsController.setDigipeatingEnabled(enabled));
+    }
+
+    public void setAprsIgateEnabled(boolean enabled) {
+        aprsIgateEnabled = enabled;
+        executeAprs(() -> aprsController.setIgateEnabled(enabled));
+        updateAprsIsConnection();
+    }
+
+    public void setAprsIsDisplayEnabled(boolean enabled) {
+        aprsIsDisplayEnabled = enabled;
+        AprsIsClient client = aprsIsClient;
+        if (client != null) client.setReceiveEnabled(enabled);
+        if (enabled) refreshAprsIsFilterLocation();
+        else if (client != null) client.setFilterLocation(null, null);
+        updateAprsIsConnection();
+    }
+
+    public void setCallsign(@NonNull String callsign) {
+        this.callsign = callsign;
+        if (aprsController != null) executeAprs(() -> aprsController.setCallsign(callsign));
+        if (aprsFeedRepository != null) aprsFeedRepository.refresh();
+        AprsIsClient client = aprsIsClient;
+        if (client != null) client.setCallsign(callsign);
+    }
+
+    private void updateAprsIsConnection() {
+        AprsIsClient client = aprsIsClient;
+        if (client == null) return;
+        client.setCallsign(callsign);
+        boolean active = aprsIgateEnabled || aprsIsDisplayEnabled;
+        if (!active) {
+            client.setEnabled(false);
+            client.setTransmitEnabled(false);
+            return;
+        }
+        client.setTransmitEnabled(aprsIgateEnabled);
+        client.setEnabled(true);
+    }
+
+    private void refreshAprsIsFilterLocation() {
+        AprsIsClient client = aprsIsClient;
+        if (client == null) return;
+        client.setFilterLocation(null, null);
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) return;
+        if (GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(getBaseContext())
+                != ConnectionResult.SUCCESS) return;
+        FusedLocationProviderClient locationClient =
+            LocationServices.getFusedLocationProviderClient(this);
+        CancellationToken token = new CancellationTokenSource().getToken();
+        locationClient.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, token)
+            .addOnSuccessListener(location -> {
+                if (aprsIsDisplayEnabled && location != null) {
+                    updateAprsIsFilterLocation(location.getLatitude(), location.getLongitude());
+                }
+            });
+    }
+
+    private void updateAprsIsFilterLocation(double latitude, double longitude) {
+        AprsIsClient client = aprsIsClient;
+        if (client != null && aprsIsDisplayEnabled) {
+            client.setFilterLocation(latitude, longitude);
+        }
+    }
+
+    public void setAprsHistoryWindow(String historyWindow) {
+        aprsFeedRepository.setHistoryWindow(historyWindow);
+    }
+
+    public void setAprsDestinationFilter(String destinationFilter) {
+        aprsFeedRepository.setDestinationFilter(destinationFilter);
     }
 
     public boolean getAprsBeaconPosition() {
-        return this.aprsBeaconPosition;
-    }
-
-    private void startBeaconScheduler() {
-        if (beaconScheduler == null || beaconScheduler.isShutdown()) {
-            beaconScheduler = Executors.newSingleThreadScheduledExecutor();
-        }
-        // Cancel any old task
-        if (beaconFuture != null) {
-            beaconFuture.cancel(false);
-        }
-
-        // First run now (or after initial delay), then every 5 minutes
-        beaconFuture = beaconScheduler.scheduleAtFixedRate(() -> {
-            try {
-                // Acquire a short wakelock just for the beacon if you prefer not to keep it held.
-                if (wakeLock != null && !wakeLock.isHeld()) {
-                    // 20 seconds is usually ample for a single beacon
-                    wakeLock.acquire(20_000);
-                }
-                if (aprsBeaconPosition) {
-                    sendPositionBeacon();  // uses FusedLocation + TX
-                }
-            } catch (Throwable t) {
-                Log.w(TAG, "Beacon task error", t);
-            } finally {
-                if (wakeLock != null && wakeLock.isHeld()) {
-                    try { wakeLock.release(); } catch (Throwable ignored) {}
-                }
-            }
-        }, 0, APRS_BEACON_MINS, TimeUnit.MINUTES);
-    }
-
-    private void stopBeaconScheduler() {
-        if (beaconFuture != null) {
-            beaconFuture.cancel(false);
-            beaconFuture = null;
-        }
-        if (beaconScheduler != null) {
-            beaconScheduler.shutdownNow();
-            beaconScheduler = null;
-        }
+        return aprsBeaconPosition;
     }
 
     public void setMode(RadioMode mode) {
         if (mode == RadioMode.FLASHING) {
+            if (!canFlashFirmware()) {
+                Log.w(TAG, "Firmware flashing requires USB serial; current transport is not flash-capable.");
+                return;
+            }
             radioModule.stop();
             audioTrack.stop();
-            usbIoManager.stop();
-            try {
-                serialPort.setDTR(false);
-                serialPort.setRTS(true);
-                Thread.sleep(100);
-                serialPort.setDTR(true);
-                serialPort.setRTS(false);
-                Thread.sleep(50);
-                serialPort.setDTR(false);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } catch (IOException e) {
-                Log.e(TAG, "Error while restart ESP32.", e);
+            if (!activeTransport.prepareForFirmwareFlashing()) {
+                Log.w(TAG, "USB transport could not enter firmware flashing mode.");
+                return;
             }
         }
 
@@ -379,6 +433,11 @@ public class RadioAudioService extends Service {
         this.mode = mode;
         if (previousMode != mode) {
             syncFirmwareAudioStateForMode(mode);
+            if ((mode == RadioMode.RX || mode == RadioMode.SCAN) && radioModule.hasRadioConfig()) {
+                updateAudioFocusForSquelch(radioModule.isSquelched());
+            } else {
+                abandonAudioFocus();
+            }
         }
     }
 
@@ -408,9 +467,18 @@ public class RadioAudioService extends Service {
         }
     }
 
+    public LiveData<List<AprsFeedRow>> getAprsFeed() {
+        return aprsFeedRepository.getFeed();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        aprsExecutor = Executors.newSingleThreadScheduledExecutor();
+        aprsController = createAprsController();
+        aprsIsClient = new AprsIsClient("kv4p-ht", BuildConfig.VERSION_NAME,
+            packet -> executeAprs(() -> aprsController.handleAprsIsPacket(packet)));
+        aprsIsClient.setServer("rotate.aprs2.net:14580");
 
         // Keep CPU on while service is running so we can play and process audio
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
@@ -421,7 +489,7 @@ public class RadioAudioService extends Service {
         // Create channel for the persistent notification user can interact with
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel chan = new NotificationChannel(
-                    "KV4P_HT_RADIO_AUDIO",
+                    NOTIFICATION_CHANNEL_ID,
                     "kv4p HT audio",
                     NotificationManager.IMPORTANCE_DEFAULT);
             chan.setSound(null, null); // no sound for the notification itself
@@ -430,9 +498,116 @@ public class RadioAudioService extends Service {
             NotificationManager nm = getSystemService(NotificationManager.class);
             nm.createNotificationChannel(chan);
         }
+        // Missed ticks do not accumulate: wait after each execution on the ordered APRS worker.
+        aprsExecutor.scheduleWithFixedDelay(this::tickAprsController, 0, 500, TimeUnit.MILLISECONDS);
+    }
 
-        SecureRandom random = new SecureRandom();
-        messageNumber = random.nextInt(APRS_MAX_MESSAGE_NUM); // Start with any Message # from 0-99999, we'll increment it by 1 each tx until restart.
+    private void tickAprsController() {
+        try {
+            aprsController.tick(System.currentTimeMillis());
+        } catch (RuntimeException e) {
+            // Unhandled exceptions cancel future executions of a scheduled periodic task.
+            Log.w(TAG, "APRS housekeeping tick failed; later ticks remain scheduled", e);
+        }
+    }
+
+    private AprsController createAprsController() {
+        AppDatabase database = AppDatabase.getInstance(getApplicationContext());
+        aprsFeedRepository = new AprsFeedRepository(database.aprsEventDao(), aprsExecutor,
+            () -> callsign);
+        AprsController controller = new AprsController(
+            new RoomAprsRepository(database, aprsFeedRepository), new ServiceAprsCallbacks());
+        controller.setCallsign(callsign);
+        controller.setTxDestination(APRS_TOCALL);
+        controller.setTxPath(DEFAULT_DIGIPEATERS);
+        return controller;
+    }
+
+    /** Keeps synchronous controller storage off UI/transport threads and preserves arrival order. */
+    private void executeAprs(Runnable operation) {
+        ExecutorService executor = aprsExecutor;
+        if (executor == null) return;
+        try {
+            executor.execute(operation);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            Log.d(TAG, "Ignoring APRS work after service shutdown", e);
+        }
+    }
+
+    /** Uses the existing connection tick; GPS and frequency switching stay asynchronous. */
+    private void tickPositionBeacon() {
+        long now = System.currentTimeMillis();
+        if (!aprsBeaconSchedule.isDue(now)) return;
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            callbacks.unknownLocation();
+            return;
+        }
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(20_000);
+            sendPositionBeacon();
+        } finally {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        }
+    }
+
+    private final class ServiceAprsCallbacks implements AprsController.Callbacks {
+        @Override public void onIncomingMessage(AprsEvent event, boolean forLocal) {
+            if (!forLocal) return;
+            handler.post(() -> callbacks.showNotification(MESSAGE_NOTIFICATION_CHANNEL_ID,
+                MESSAGE_NOTIFICATION_TO_YOU_ID, event.getFromCallsign() + " messaged you",
+                event.getBody(), INTENT_OPEN_CHAT));
+        }
+
+        @Override public AprsController.RfTransmission submitRf(APRSPacket packet, Long requestedFrequencyHz,
+                AprsController.RfTransmissionPurpose purpose) {
+            if (!canTransmitAprs()) {
+                return null;
+            }
+            Long selectedTxHz = activeTxFrequencyHz();
+            if (AprsRfFrequencyPolicy.isTerminalMismatch(requestedFrequencyHz, selectedTxHz, purpose)) {
+                Log.d(TAG, "Rejecting APRS RF submission: requested " + requestedFrequencyHz
+                    + " Hz, selected TX frequency " + selectedTxHz + " Hz, purpose " + purpose);
+                // The app does not automatically retune to the original message frequency.
+                return AprsController.RfTransmission.builder().retryAllowed(false).build();
+            }
+            Long targetHz = requestedFrequencyHz;
+            if (purpose == AprsController.RfTransmissionPurpose.POSITION_BEACON
+                    && aprsBeaconTxOverrideMhz != null) {
+                targetHz = AprsRfFrequencyPolicy.toHz(aprsBeaconTxOverrideMhz);
+            }
+            Long frequencyHz = AprsRfFrequencyPolicy.transmissionFrequency(targetHz, selectedTxHz, purpose);
+            if (frequencyHz == null) return null;
+            AprsController.Transmission transmission = transmitAprsPacketOnFrequency(packet,
+                frequencyHz, (float) (frequencyHz / 1_000_000d));
+            return AprsController.RfTransmission.builder().transmission(transmission).build();
+        }
+
+        @Override public BeaconData getBeaconData() {
+            // Beacon scheduling is app-owned: location and frequency changes are asynchronous.
+            return null;
+        }
+
+        @Override public boolean submitAprsIs(String tnc2, Runnable onSuccess) {
+            AprsIsClient client = aprsIsClient;
+            return client != null && client.send(callsign, tnc2,
+                () -> executeAprs(onSuccess));
+        }
+
+        private boolean canTransmitAprs() {
+            return isTxAllowed() && AprsRfFrequencyPolicy.allowsMode(getMode())
+                && hostToEsp32 != null;
+        }
+
+        private AprsController.Transmission transmitAprsPacketOnFrequency(
+            APRSPacket packet, Long frequencyHz, float txFrequencyMhz) {
+            byte[] rawAx25 = packet.toAX25Frame();
+            return txAX25PacketOnFrequency(new Packet(rawAx25), txFrequencyMhz)
+                ? AprsController.Transmission.builder().packet(packet).frequencyHz(frequencyHz)
+                    .rawAx25(rawAx25).build() : null;
+        }
     }
 
     /**
@@ -451,7 +626,7 @@ public class RadioAudioService extends Service {
         if (intent != null && ACTION_STOP_SERVICE.equals(intent.getAction())) {
             Intent stopIntent = new Intent(ACTION_SERVICE_STOPPING);
             stopIntent.setPackage(getPackageName());
-            sendBroadcast(stopIntent);
+            sendBroadcast(stopIntent); // NOSONAR S5320: package-scoped and received only by this app.
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return START_NOT_STICKY;
@@ -460,8 +635,21 @@ public class RadioAudioService extends Service {
         Notification notification = buildForegroundNotification();
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(SERVICE_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                startForeground(
+                        SERVICE_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                                | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                                | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                );
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                        SERVICE_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                                | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                );
             } else {
                 startForeground(SERVICE_ID, notification);
             }
@@ -486,7 +674,7 @@ public class RadioAudioService extends Service {
         stopSelf.setAction(ACTION_STOP_SERVICE);
         PendingIntent pStopSelf = PendingIntent.getService(this, 0, stopSelf, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        return new NotificationCompat.Builder(this, "KV4P_HT_RADIO_AUDIO")
+        return new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_radio)
                 .setContentTitle("kv4p HT")
                 .setContentText("Starting up...")
@@ -504,7 +692,7 @@ public class RadioAudioService extends Service {
         stopSelf.setAction(ACTION_STOP_SERVICE);
         PendingIntent pStopSelf = PendingIntent.getService(this, 0, stopSelf, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification notification = new NotificationCompat.Builder(this, "KV4P_HT_RADIO_AUDIO")
+        Notification notification = new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_radio)
                 .setContentTitle("kv4p HT")
                 .setContentText(text)
@@ -539,36 +727,43 @@ public class RadioAudioService extends Service {
      * This is useful to call after initial connection or when memory definitions change.
      */
     public void updateNotificationFromCurrentState() {
-        String text = null;
-        if (activeMemoryId > -1) {
-            List<ChannelMemory> memories = null;
-            if (channelMemoriesLiveData != null) {
-                memories = channelMemoriesLiveData.getValue();
-            }
-            if (memories != null) {
-                for (ChannelMemory memory : memories) {
-                    if (memory.memoryId == activeMemoryId) {
-                        text = memory.name + " (" + memory.frequency + " MHz)";
-                        break;
-                    }
-                }
-            }
-
-            if (text == null && !activeFrequencyStr.isEmpty()) {
-                text = "Memory " + activeMemoryId + " (" + activeFrequencyStr + " MHz)";
-            }
-        } else if (!activeFrequencyStr.isEmpty()) {
-            try {
-                float freq = Float.parseFloat(activeFrequencyStr);
-                text = "Simplex " + formatFreq(freq) + " MHz";
-            } catch (NumberFormatException e) {
-                text = "Simplex " + activeFrequencyStr + " MHz";
-            }
+        String text = notificationTextForActiveMemory();
+        if (text == null) {
+            text = notificationTextForSimplexFrequency();
         }
-
         if (text != null) {
             updateForegroundNotification(text);
         }
+    }
+
+    private String notificationTextForActiveMemory() {
+        if (activeMemoryId > -1) {
+            List<ChannelMemory> memories = channelMemoriesLiveData == null
+                    ? null : channelMemoriesLiveData.getValue();
+            if (memories != null) {
+                for (ChannelMemory memory : memories) {
+                    if (memory.memoryId == activeMemoryId) {
+                        return memory.name + " (" + memory.frequency + MEMORY_FREQUENCY_SUFFIX;
+                    }
+                }
+            }
+            if (!activeFrequencyStr.isEmpty()) {
+                return "Memory " + activeMemoryId + " (" + activeFrequencyStr + MEMORY_FREQUENCY_SUFFIX;
+            }
+        }
+        return null;
+    }
+
+    private String notificationTextForSimplexFrequency() {
+        if (activeMemoryId == -1 && !activeFrequencyStr.isEmpty()) {
+            try {
+                float freq = Float.parseFloat(activeFrequencyStr);
+                return SIMPLEX_PREFIX + formatFreq(freq) + MEGAHERTZ;
+            } catch (NumberFormatException e) {
+                return SIMPLEX_PREFIX + activeFrequencyStr + MEGAHERTZ;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -576,32 +771,28 @@ public class RadioAudioService extends Service {
         super.onDestroy();
         tryToStopRadioModule();
         connectionController.stop();
+        if (aprsIsClient != null) {
+            aprsIsClient.close();
+            aprsIsClient = null;
+        }
+        if (aprsExecutor != null) {
+            aprsExecutor.shutdownNow();
+        }
         cancelHelloTimeout();
 
-        // Clean up APRS beacon executor
-        if (this.beaconScheduler != null && !beaconScheduler.isShutdown()) {
-            beaconScheduler.shutdownNow();
-        }
-
-        // Clean up USB resources to prevent race conditions on restart
-        if (usbIoManager != null) {
-            usbIoManager.stop();
-            usbIoManager = null;
-        }
-        if (serialPort != null) {
-            try {
-                serialPort.close();
-            } catch (IOException e) {
-                // Ignore, closing anyway.
-            }
-            serialPort = null;
-        }
+        closePortAndReset();
 
         if (audioTrack != null) {
             audioTrack.stop();
             audioTrack.release();
             audioTrack = null;
         }
+        if (codec2 != null) {
+            codec2.close();
+            codec2 = null;
+        }
+        abandonAudioFocus();
+        stopVoiceCapture();
 
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
@@ -666,7 +857,7 @@ public class RadioAudioService extends Service {
         float freq;
         try {
             freq = Float.parseFloat(makeSafeHamFreq(frequencyStr));
-            updateForegroundNotification("Simplex " + String.format(Locale.US, "%.4f", freq) + " MHz");
+            updateForegroundNotification(SIMPLEX_PREFIX + String.format(Locale.US, "%.4f", freq) + MEGAHERTZ);
         } catch (NumberFormatException e) {
             Log.w(TAG, "Invalid frequency string: " + frequencyStr, e);
             return;
@@ -801,9 +992,9 @@ public class RadioAudioService extends Service {
         }
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build();
-        audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+        audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(audioAttributes)
             .build();
         audioTrack = new AudioTrack.Builder()
@@ -844,12 +1035,16 @@ public class RadioAudioService extends Service {
             return;
         }
         if (mode == RadioMode.RX && isTxAllowed()) {
+            txAudioEncoder.reset();
+            codec2TxSamples = 0;
+            codec2HasPendingInput = false;
             setMode(RadioMode.TX);
             callbacks.sMeterUpdate(0);
             setTxRunAwayTimer();
             radioModule.pttDown();
             audioTrackVolume = 0.0f;
             Optional.ofNullable(audioTrack).ifPresent(t -> t.setVolume(0.0f));
+            startVoiceCapture();
             callbacks.txStarted();
         } else {
             Log.w(TAG, "Attempted to start PTT when not allowed", new Throwable());
@@ -858,6 +1053,7 @@ public class RadioAudioService extends Service {
 
     public void endPtt() {
         if (mode == RadioMode.TX) {
+            stopVoiceCapture();
             setMode(RadioMode.RX);
             audioTrackVolume = 0.0f;
             Optional.ofNullable(audioTrack).ifPresent(t -> t.setVolume(0.0f));
@@ -866,12 +1062,74 @@ public class RadioAudioService extends Service {
         }
     }
 
+    public boolean isVoiceCaptureActive() {
+        return voiceCaptureActive;
+    }
+
+    private void startVoiceCapture() {
+        if (voiceCaptureActive || checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        int captureSession = voiceCaptureSession.incrementAndGet();
+        releaseAudioRecord();
+        AudioRecord recorder = new AudioRecord(MediaRecorder.AudioSource.MIC, AUDIO_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                TX_AUDIO_MIN_BUFFER_SIZE);
+        if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+            Log.w(TAG, "AudioRecord initialization failed");
+            recorder.release();
+            return;
+        }
+        recorder.startRecording();
+        audioRecord.set(recorder);
+        voiceCaptureActive = true;
+        new Thread(() -> captureVoiceAudio(recorder, captureSession), "Radio voice capture").start();
+    }
+
+    private void captureVoiceAudio(AudioRecord recorder, int captureSession) {
+        short[] audioBuffer = new short[AUDIO_FRAME_SAMPLES];
+        while (isVoiceCaptureSessionActive(recorder, captureSession)) {
+            int samples = recorder.read(audioBuffer, 0, AUDIO_FRAME_SAMPLES, AudioRecord.READ_BLOCKING);
+            if (samples == AUDIO_FRAME_SAMPLES && isVoiceCaptureSessionActive(recorder, captureSession)) {
+                sendAudioToESP32(audioBuffer, false);
+            }
+        }
+    }
+
+    private boolean isVoiceCaptureSessionActive(AudioRecord recorder, int captureSession) {
+        return voiceCaptureActive
+                && voiceCaptureSession.get() == captureSession
+                && audioRecord.get() == recorder;
+    }
+
+    private void stopVoiceCapture() {
+        if (!voiceCaptureActive && audioRecord.get() == null) {
+            return;
+        }
+        voiceCaptureActive = false;
+        voiceCaptureSession.incrementAndGet();
+        releaseAudioRecord();
+    }
+
+    private void releaseAudioRecord() {
+        AudioRecord recorder = audioRecord.getAndSet(null);
+        if (recorder == null) {
+            return;
+        }
+        try {
+            recorder.stop();
+        } catch (IllegalStateException ignored) {
+            // Recorder was never started or was already stopped.
+        }
+        recorder.release();
+    }
+
     public void reconnectViaUSB() {
         Log.i(TAG, connectLog("reconnectViaUSB(): clearing pending state for next attempt"));
         usbPermissionRequestPending = false;
         // Re-plug is an explicit user/device action; allow connection attempts again.
         radioMissingNotified = false;
-        connectionController.markAttemptFinished();
     }
 
     public void renegotiateAfterFlashing() {
@@ -888,54 +1146,55 @@ public class RadioAudioService extends Service {
 
     private boolean isConnectionReady() {
         return hostToEsp32 != null
-            && serialPort != null
-            && usbIoManager != null;
+            && activeTransport != null
+            && activeTransport.isReady();
     }
 
     private void closePortAndReset() {
         waitingForHello = false;
         cancelHelloTimeout();
+        abandonAudioFocus();
         radioModule.detachSender();
         hostToEsp32 = null;
-        if (usbIoManager != null) {
+        RadioTransport transport = activeTransport;
+        activeTransport = null;
+        if (transport != null) {
             try {
-                usbIoManager.stop();
+                transport.close();
             } catch (Exception ignored) {
-                // Best-effort cleanup during teardown; transport may already be stopping.
+                // Best-effort cleanup during teardown.
             }
-            usbIoManager = null;
-        }
-        if (serialPort != null) {
-            try {
-                serialPort.close();
-            } catch (Exception ignored) {
-                // Best-effort cleanup during teardown; port may already be closed.
-            }
-            serialPort = null;
         }
     }
 
-    private void attemptUsbConnect() {
+    private void reconcileConnections() {
+        handler.post(this::tickPositionBeacon);
         activeUsbConnectAttemptId = ++usbConnectAttemptSeq;
-        Log.d(TAG, connectLog("attemptUsbConnect(): starting; state=" + connectionStateSummary()));
-        if (isConnectionReady()) {
-            Log.d(TAG, connectLog("attemptUsbConnect(): already connected, skipping enumeration"));
-            connectionController.markAttemptFinished();
-            return;
-        }
-        setMode(RadioMode.STARTUP);
-        clearRadioTypeAndLimits();
+        Log.d(TAG, connectLog("reconcileConnections(): state=" + connectionStateSummary()));
         Optional<UsbDevice> device = usbManager.getDeviceList().values().stream()
             .filter(this::isESP32Device)
             .findFirst();
+        if (isConnectionReady()) {
+            return;
+        }
         if (device.isPresent()) {
-            Log.d(TAG, connectLog("attemptUsbConnect(): found ESP32 device"));
+            if (activeTransport instanceof BleKissRadioTransport) {
+                closePortAndReset();
+            }
+            setMode(RadioMode.STARTUP);
+            clearRadioTypeAndLimits();
+            Log.d(TAG, connectLog("reconcileConnections(): found ESP32 USB device"));
             callbacks.hideSnackBar();
             setupSerialConnection();
             return;
         }
-        Log.d(TAG, connectLog("attemptUsbConnect(): no ESP32 detected"));
-        radioMissing();
+        if (activeTransport == null) {
+            setMode(RadioMode.STARTUP);
+            clearRadioTypeAndLimits();
+            notifyRadioMissing();
+            Log.d(TAG, connectLog("reconcileConnections(): no USB device; starting BLE discovery"));
+            attemptBleConnect();
+        }
     }
 
     private boolean isESP32Device(UsbDevice device) {
@@ -990,14 +1249,18 @@ public class RadioAudioService extends Service {
             radioMissing();
             return;
         }
-        serialPort = driver.getPorts().get(0); // Most devices have just one port (port 0)
+        UsbSerialPort serialPort = driver.getPorts().get(0); // Most devices have just one port (port 0)
         Log.d(TAG, connectLog("setupSerialConnection(): serialPort=" + serialPort));
         try {
             serialPort.open(connection);
             serialPort.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
         } catch (Exception e) {
             Log.w(TAG, connectLog("setupSerialConnection(): couldn't open USB serial port"), e);
-            closePortAndReset();
+            try {
+                serialPort.close();
+            } catch (Exception ignored) {
+                // Best-effort cleanup after a partial open.
+            }
             radioMissing();
             return;
         }
@@ -1007,34 +1270,63 @@ public class RadioAudioService extends Service {
         } catch (Exception e) {
             // Ignore, may not be supported on all devices.
         }
-        usbIoManager = new SerialInputOutputManager(serialPort, new SerialInputOutputManager.Listener() {
+        RadioTransport transport = new UsbSerialRadioTransport(serialPort, handler);
+        activeTransport = transport;
+        transport.start(createTransportListener(transport));
+    }
+
+    private void attemptBleConnect() {
+        RadioTransport transport = new BleKissRadioTransport(this, handler);
+        activeTransport = transport;
+        transport.start(createTransportListener(transport));
+    }
+
+    private RadioTransport.Listener createTransportListener(RadioTransport transport) {
+        return new RadioTransport.Listener() {
             @Override
-            public void onNewData(byte[] data) {
-                esp32DataStreamParser.processBytes(data);
+            public void onBytes(byte[] bytes) {
+                processRadioBytes(bytes);
             }
+
             @Override
-            public void onRunError(Exception e) {
-                Log.w(TAG, connectLog("onRunError(): error reading from ESP32; state=" + connectionStateSummary()), e);
-                if (audioTrack != null) {
-                    audioTrack.stop();
+            public void onReady() {
+                if (activeTransport != transport) {
+                    return;
                 }
-                closePortAndReset();
-                radioMissing();
+                callbacks.hideSnackBar();
+                hostToEsp32 = new Protocol.Sender(transport::writeAsync);
+                radioModule.attachSender(hostToEsp32);
+                Log.i(TAG, connectLog(transport.getName() + " connected; starting handshake"));
+                startProtocolHandshake();
             }
-        });
-        usbIoManager.setWriteBufferSize(90000); // Must be large enough that ESP32 can take its time accepting our bytes without overrun.
-        usbIoManager.setReadBufferSize(1024); // Must not be 0 (infinite) or it may block on read() until a write() occurs.
-        usbIoManager.setReadBufferCount(16 * 2);
-        usbIoManager.start();
-        hostToEsp32 = new Protocol.Sender(usbIoManager);
-        radioModule.attachSender(hostToEsp32);
-        Log.i(TAG, connectLog("setupSerialConnection(): serial transport connected; starting handshake"));
-        startProtocolHandshake();
+
+            @Override
+            public void onDisconnected() {
+                if (activeTransport == transport) {
+                    Log.i(TAG, connectLog(transport.getName() + " disconnected"));
+                    radioMissing();
+                }
+            }
+
+            @Override
+            public void onError(Exception error) {
+                if (activeTransport == transport) {
+                    Log.w(TAG, connectLog(transport.getName() + " transport error"), error);
+                    if (audioTrack != null) {
+                        audioTrack.stop();
+                    }
+                    radioMissing();
+                }
+            }
+        };
+    }
+
+    private synchronized void processRadioBytes(byte[] data) {
+        esp32DataStreamParser.processBytes(data);
     }
 
     public void radioConnected() {
         Log.i(TAG, connectLog("radioConnected(): handshake complete; state=" + connectionStateSummary()));
-        connectionController.markAttemptFinished();
         radioMissingNotified = false;
         // Acquire WakeLock if not already held to ensure audio processing continues in background.
         if (wakeLock != null && !wakeLock.isHeld()) {
@@ -1062,7 +1354,6 @@ public class RadioAudioService extends Service {
             Log.w(TAG, handshakeLog(handshakeId, "waitForHello(): timed out after " + HELLO_TIMEOUT_MS + "ms"));
             setMode(RadioMode.BAD_FIRMWARE);
             callbacks.missingFirmware();
-            connectionController.markAttemptFinished();
         };
         handler.postDelayed(helloTimeoutRunnable, HELLO_TIMEOUT_MS);
     }
@@ -1094,7 +1385,6 @@ public class RadioAudioService extends Service {
             Log.e(TAG, handshakeLog(handshakeId, "HELLO missing valid Hello payload; firmware upgrade required"));
             callbacks.outdatedFirmware(0);
             setMode(RadioMode.BAD_FIRMWARE);
-            connectionController.markAttemptFinished();
             return;
         }
 
@@ -1104,7 +1394,6 @@ public class RadioAudioService extends Service {
         if (version.getVer() < FirmwareUtils.PACKAGED_FIRMWARE_VER) {
             callbacks.outdatedFirmware(version.getVer());
             setMode(RadioMode.BAD_FIRMWARE);
-            connectionController.markAttemptFinished();
             return;
         }
 
@@ -1113,7 +1402,6 @@ public class RadioAudioService extends Service {
             Log.w(TAG, handshakeLog(handshakeId, "radio module not found"));
             setMode(RadioMode.BAD_FIRMWARE);
             callbacks.radioModuleNotFound();
-            connectionController.markAttemptFinished();
             return;
         }
 
@@ -1138,14 +1426,18 @@ public class RadioAudioService extends Service {
     // Called in many situations where radio connection is found to be broken
     private void radioMissing() {
         Log.i(TAG, connectLog("radioMissing(): state=" + connectionStateSummary()));
-        connectionController.markAttemptFinished();
+        stopVoiceCapture();
         closePortAndReset();
+        notifyRadioMissing();
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release(); // Don't keep screen on
+        }
+    }
+
+    private void notifyRadioMissing() {
         if (!radioMissingNotified) {
             radioMissingNotified = true;
             callbacks.radioMissing(); // Notify UI only on transition into missing state
-        }
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release(); // Don't keep screen on
         }
     }
 
@@ -1160,8 +1452,8 @@ public class RadioAudioService extends Service {
     private String connectionStateSummary() {
         return "mode=" + mode
             + ",hostToEsp32=" + (hostToEsp32 != null)
-            + ",serialPort=" + (serialPort != null)
-            + ",usbIoManager=" + (usbIoManager != null)
+            + ",activeTransport=" + (activeTransport != null ? activeTransport.getName() : "null")
+            + ",activeTransportReady=" + (activeTransport != null && activeTransport.isReady())
             + ",usbPermissionPending=" + usbPermissionRequestPending
             + ",radioMissingNotified=" + radioMissingNotified;
     }
@@ -1222,12 +1514,41 @@ public class RadioAudioService extends Service {
         }
     }
 
+    private Long activeFrequencyHz() {
+        try {
+            return Math.round(Double.parseDouble(activeFrequencyStr) * 1_000_000d);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Long activeTxFrequencyHz() {
+        return AprsRfFrequencyPolicy.toHz(radioModule.getDesiredTxFrequency());
+    }
+
     public boolean isHasHighLowPowerSwitch() {
         return radioModule.hasHighLowPowerSwitch();
     }
 
     public boolean isHasPhysPttButton() {
         return radioModule.hasPhysPttButton();
+    }
+
+    public boolean supportsFreeDv2400b() {
+        return radioModule.supportsFreeDv2400b();
+    }
+
+    public synchronized boolean isFreeDv2400bEnabled() {
+        return freeDv2400bEnabled;
+    }
+
+    public synchronized void setFreeDv2400bEnabled(boolean enabled) {
+        enabled = enabled && supportsFreeDv2400b();
+        if (enabled && codec2 == null) codec2 = new Codec2();
+        freeDv2400bEnabled = enabled;
+        codec2TxSamples = 0;
+        codec2HasPendingInput = false;
+        radioModule.setFreeDv2400b(enabled);
     }
 
     public float getMinRadioFreq() {
@@ -1287,15 +1608,7 @@ public class RadioAudioService extends Service {
         if (channelMemories == null || channelMemories.isEmpty()) {
             return;
         }
-        // Find the index of our current active memory in the list,
-        // or -1 if we didn't find it (e.g. simplex mode).
-        int currentIndex = -1;
-        for (int i = 0; i < channelMemories.size(); i++) {
-            if (channelMemories.get(i).memoryId == activeMemoryId) {
-                currentIndex = i;
-                break;
-            }
-        }
+        int currentIndex = indexOfActiveMemory(channelMemories);
         // If we’re in simplex (activeMemoryId == -1), treat it as if
         // the "current index" is -1 so the next index starts at 0.
         int nextIndex = (currentIndex + 1) % channelMemories.size();
@@ -1303,23 +1616,7 @@ public class RadioAudioService extends Service {
         do {
             ChannelMemory candidate = channelMemories.get(nextIndex);
             // If not marked as skipped, and it's in the active band, we tune to it and return.
-            float memoryFreqFloat = 0.0f;
-            try {
-                memoryFreqFloat = Float.parseFloat(candidate.frequency);
-            } catch (Exception e) {
-                Log.d(TAG, "Memory with id " + candidate.memoryId + " had invalid frequency.");
-            }
-            if (!candidate.skipDuringScan && memoryFreqFloat >= getMinRadioFreq() && memoryFreqFloat <= getMaxRadioFreq()) {
-                // If squelch is off (0), use squelch=1 during scanning.
-                int desiredSquelch = scanBaseSquelch >= 0 ? scanBaseSquelch : radioModule.getDesiredSquelch();
-                radioModule.beginUpdate();
-                try {
-                    radioModule.setSquelch((byte) (desiredSquelch > 0 ? desiredSquelch : 1));
-                    tuneToMemory(candidate);
-                } finally {
-                    radioModule.endUpdate();
-                }
-                callbacks.scannedToMemory(candidate.memoryId);
+            if (scanToMemoryIfEligible(candidate)) {
                 return;
             }
             // Otherwise, move on to the next memory in the list.
@@ -1328,6 +1625,38 @@ public class RadioAudioService extends Service {
         } while (nextIndex != firstTriedIndex);
         // If we reach here, all memories are marked skipDuringScan.
         Log.d(TAG, "Warning: All memories are skipDuringScan, no next memory found to scan to.");
+    }
+
+    private int indexOfActiveMemory(List<ChannelMemory> channelMemories) {
+        for (int i = 0; i < channelMemories.size(); i++) {
+            if (channelMemories.get(i).memoryId == activeMemoryId) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private boolean scanToMemoryIfEligible(ChannelMemory candidate) {
+        float frequency;
+        try {
+            frequency = Float.parseFloat(candidate.frequency);
+        } catch (NumberFormatException e) {
+            Log.d(TAG, "Memory with id " + candidate.memoryId + " had invalid frequency.");
+            return false;
+        }
+        if (candidate.skipDuringScan || frequency < getMinRadioFreq() || frequency > getMaxRadioFreq()) {
+            return false;
+        }
+        int desiredSquelch = scanBaseSquelch >= 0 ? scanBaseSquelch : radioModule.getDesiredSquelch();
+        radioModule.beginUpdate();
+        try {
+            radioModule.setSquelch((byte) (desiredSquelch > 0 ? desiredSquelch : DEFAULT_SCAN_SQUELCH));
+            tuneToMemory(candidate);
+        } finally {
+            radioModule.endUpdate();
+        }
+        callbacks.scannedToMemory(candidate.memoryId);
+        return true;
     }
 
     private short[] applyMicGain(short[] audioBuffer, int samples) {
@@ -1348,18 +1677,56 @@ public class RadioAudioService extends Service {
     }
 
     public void sendAudioToESP32(short[] samples, boolean dataMode) {
-        if (hostToEsp32 == null) {
+        Protocol.Sender sender = hostToEsp32;
+        if (sender == null) {
             return; // If connection is lost, just drop the audio frame.
+        }
+        if (freeDv2400bEnabled && !dataMode) {
+            sendFreeDvAudio(sender, samples);
+            return;
         }
         if (!dataMode) {
             applyMicGain(samples, AUDIO_FRAME_SAMPLES);
         }
-        int encodedLength = ImaAdpcm.encodeBlock(samples, 0, AUDIO_FRAME_SAMPLES, txAudioFrame, 0);
-        hostToEsp32.txAudio(txAudioFrame, encodedLength);
+        int encodedLength = txAudioEncoder.encodeBlock(samples, 0, AUDIO_FRAME_SAMPLES, txAudioFrame, 0);
+        sender.txAudio(txAudioFrame, encodedLength);
+    }
+
+    private synchronized void sendFreeDvAudio(Protocol.Sender sender, short[] samples) {
+        if (codec2 == null) return;
+        applyMicGain(samples, samples.length);
+        // The app captures at 16 kHz; Codec2 1300 consumes 320 samples at 8 kHz.
+        for (short sample : samples) {
+            if (!codec2HasPendingInput) {
+                codec2PendingInput = sample;
+                codec2HasPendingInput = true;
+                continue;
+            }
+            codec2TxPcm[codec2TxSamples++] = (short) ((codec2PendingInput + sample) / 2);
+            codec2HasPendingInput = false;
+            if (codec2TxSamples == Codec2.PCM_SAMPLES) {
+                codec2.encode(codec2TxPcm, codec2Frame);
+                sender.txDigital(codec2Frame);
+                codec2TxSamples = 0;
+            }
+        }
     }
 
     public boolean isRadioConnected() {
         return isConnectionReady() && mode != RadioMode.STARTUP;
+    }
+
+    public boolean canFlashFirmware() {
+        return activeTransport != null
+            && activeTransport.isReady()
+            && activeTransport.supportsFirmwareFlashing();
+    }
+
+    public UsbSerialPort getSerialPort() {
+        if (activeTransport instanceof UsbSerialRadioTransport) {
+            return ((UsbSerialRadioTransport) activeTransport).getSerialPort();
+        }
+        return null;
     }
 
     /**
@@ -1402,6 +1769,10 @@ public class RadioAudioService extends Service {
                 handleRxAudio(param, offset, len);
                 break;
 
+            case COMMAND_RX_DIGITAL:
+                handleRxDigital(param, offset, len);
+                break;
+
             case COMMAND_WINDOW_UPDATE:
                 WindowUpdate.from(param, offset, len).ifPresent(windowAck ->
                     hostToEsp32.enlargeFlowControlWindow(windowAck.getSize()));
@@ -1432,6 +1803,7 @@ public class RadioAudioService extends Service {
 
     void handleInitialDeviceState(Protocol.DeviceState state) {
         radioModule.seedFromDeviceState(state);
+        freeDv2400bEnabled = radioModule.isFreeDv2400bEnabled();
         if (state.hasRadioConfig()) {
             activeFrequencyStr = formatFreq(state.getFreqRx());
             activeMemoryId = state.getMemoryId();
@@ -1447,12 +1819,17 @@ public class RadioAudioService extends Service {
 
     private void handleDeviceState(Protocol.DeviceState state) {
         radioModule.updateDeviceState(state);
-        callbacks.moduleTxStateChanged(radioModule.isDeviceTxActive());
+        syncFreeDvModeFromDevice();
+        syncActiveRadioConfig(state);
+        final boolean deviceTxActive = radioModule.isDeviceTxActive();
+        final boolean squelched = radioModule.isSquelched();
+        callbacks.moduleStateChanged(deviceTxActive, squelched);
+        updateAudioFocusForSquelch(squelched);
         if (radioModule.isAppliedStateInSync() && radioModule.getTxFrequency() > 0) {
             updateTxAllowed(radioModule.getTxFrequency());
         }
-        if (getMode() == RadioMode.RX || getMode() == RadioMode.SCAN) {
-            callbacks.sMeterUpdate(radioModule.getSMeter9Value());
+        if (deviceTxActive || getMode() == RadioMode.RX || getMode() == RadioMode.SCAN) {
+            callbacks.sMeterUpdate(radioModule.getSMeterBarValue());
         }
         checkScanDueToSquelch();
         if (radioModule.didPhysPttChange()) {
@@ -1467,6 +1844,35 @@ public class RadioAudioService extends Service {
                 callbacks.forcedPttEnd();
             }
         }
+    }
+
+    private void syncFreeDvModeFromDevice() {
+        boolean enabled = radioModule.isFreeDv2400bEnabled();
+        if (enabled && codec2 == null) codec2 = new Codec2();
+        if (freeDv2400bEnabled == enabled) return;
+
+        freeDv2400bEnabled = enabled;
+        codec2TxSamples = 0;
+        codec2HasPendingInput = false;
+        callbacks.freeDvModeChanged(enabled);
+    }
+
+    private void syncActiveRadioConfig(Protocol.DeviceState state) {
+        if (!state.hasRadioConfig() || state.getLastError() != 0) {
+            return;
+        }
+        if (!radioModule.isAppliedStateInSync()) {
+            return;
+        }
+        String nextFrequency = formatFreq(state.getFreqRx());
+        int nextMemoryId = state.getMemoryId();
+        if (nextMemoryId == activeMemoryId && nextFrequency.equals(activeFrequencyStr)) {
+            return;
+        }
+        activeFrequencyStr = nextFrequency;
+        activeMemoryId = nextMemoryId;
+        updateNotificationFromCurrentState();
+        callbacks.radioConfigChanged();
     }
 
     /**
@@ -1484,11 +1890,56 @@ public class RadioAudioService extends Service {
         int decoded = ImaAdpcm.decodeBlock(param.array(), offset, len, pcm16, 0, AUDIO_FRAME_SAMPLES);
 
         if ((getMode() == RadioMode.RX || getMode() == RadioMode.SCAN) && audioTrack != null) {
-            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             audioTrack.write(pcm16, 0, decoded, AudioTrack.WRITE_NON_BLOCKING);
-            audioManager.requestAudioFocus(audioFocusRequest);
             ensureAudioPlaying();
         }
+    }
+
+    private synchronized void handleRxDigital(final ByteBuffer param, final int offset, final int len) {
+        if (!freeDv2400bEnabled || codec2 == null || param == null || !param.hasArray()
+            || len != Codec2.FRAME_BYTES || offset < 0 || param.limit() < offset + len) return;
+        System.arraycopy(param.array(), offset, codec2Frame, 0, Codec2.FRAME_BYTES);
+        decodeAndPlayFreeDvFrame(codec2Frame);
+    }
+
+    private void decodeAndPlayFreeDvFrame(byte[] frame) {
+        if (codec2 == null || frame == null || frame.length < Codec2.FRAME_BYTES) return;
+        codec2.decode(frame, codec2RxPcm);
+        for (int i = 0; i < Codec2.PCM_SAMPLES; i++) {
+            codec2PlaybackPcm[i * 2] = codec2RxPcm[i];
+            codec2PlaybackPcm[i * 2 + 1] = codec2RxPcm[i];
+        }
+        if ((getMode() == RadioMode.RX || getMode() == RadioMode.SCAN) && audioTrack != null) {
+            audioTrack.write(codec2PlaybackPcm, 0, codec2PlaybackPcm.length, AudioTrack.WRITE_NON_BLOCKING);
+            requestAudioFocus();
+            ensureAudioPlaying();
+        }
+    }
+
+    private void updateAudioFocusForSquelch(boolean squelched) {
+        if (!squelched && (getMode() == RadioMode.RX || getMode() == RadioMode.SCAN)) {
+            requestAudioFocus();
+        } else {
+            abandonAudioFocus();
+        }
+    }
+
+    private void requestAudioFocus() {
+        if (hasAudioFocus || audioFocusRequest == null) {
+            return;
+        }
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        hasAudioFocus = audioManager.requestAudioFocus(audioFocusRequest)
+            == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+    }
+
+    private void abandonAudioFocus() {
+        if (!hasAudioFocus || audioFocusRequest == null) {
+            return;
+        }
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        hasAudioFocus = false;
     }
 
     /**
@@ -1521,21 +1972,14 @@ public class RadioAudioService extends Service {
 
     private void handleAx25Packet(byte[] packet, int offset, int len) {
         try {
+            byte[] rawAx25 = java.util.Arrays.copyOfRange(packet, offset, offset + len);
             APRSPacket aprsPacket = Parser.parseAX25(packet, offset, len);
 
-            // Deduplicate against recent digipeats (including our own retransmissions)
-            String dedupKey = computeDigipeatDedupKey(aprsPacket);
-            if (isRecentlyDigipeated(dedupKey)) {
-                return;
-            }
-
-            // Attempt to digipeat eligible packets before local processing
-            if (digipeatPackets && mode == RadioMode.RX && isTxAllowed() && !callsign.trim().isEmpty() && hostToEsp32 != null) {
-                maybeDigipeat(aprsPacket, dedupKey);
-            }
-
-            // Notify callbacks about the received packet
-            callbacks.packetReceived(aprsPacket);
+            APRSPacket queuedPacket = aprsPacket.copy();
+            byte[] queuedFrame = rawAx25.clone();
+            Long frequencyHz = activeFrequencyHz();
+            executeAprs(() -> aprsController.handle(queuedPacket, AprsSource.RX_RF,
+                frequencyHz, queuedFrame));
         } catch (Exception e) {
             Log.d(TAG, "Unable to parse an APRS packet, skipping.");
         }
@@ -1543,27 +1987,26 @@ public class RadioAudioService extends Service {
 
     /**
      * Sends a position beacon via APRS.
-     * This method can only be called when the radio is in RX mode.
+     * Beaconing is blocked while scanning, including dedicated-frequency beacons.
      * If Google Play Services are not available, it will call unknownLocation() on the callbacks.
      */
     @RequiresPermission(allOf = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION})
     public void sendPositionBeacon() {
-        boolean isScanning = getMode() == RadioMode.SCAN;
-        boolean isRx = getMode() == RadioMode.RX;
-        boolean isCurrent = "Current".equals(aprsBeaconFrequency);
-
+        // Beaconing while scanning is intentionally skipped.
+        // The firmware can temporarily override frequency for AX.25 TX, but scan
+        // updates may change desired radio state while the override is waiting for
+        // channel access. Keep scan/beacon interaction simple for now.
+        if (getMode() == RadioMode.SCAN) {
+            Log.d(TAG, "Skipping position beacon: scanning is active.");
+            return;
+        }
         if (!isRadioConnected() || !isTxAllowed()) {
             Log.d(TAG, "Skipping position beacon: radio disconnected or tx not allowed.");
             return;
         }
 
-        if (isScanning && isCurrent) {
-            Log.d(TAG, "Skipping position beacon: scanning and set to 'Current' frequency.");
-            return;
-        }
-
-        if (!isRx && !isScanning) {
-            Log.d(TAG, "Skipping position beacon: not in RX or SCAN mode.");
+        if (!AprsRfFrequencyPolicy.allowsMode(getMode())) {
+            Log.d(TAG, "Skipping position beacon: mode does not allow this beacon frequency.");
             return;
         }
 
@@ -1577,6 +2020,7 @@ public class RadioAudioService extends Service {
         locationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, token)
             .addOnSuccessListener(location -> {
                 if (location != null) {
+                    updateAprsIsFilterLocation(location.getLatitude(), location.getLongitude());
                     performPositionBeacon(location.getLatitude(), location.getLongitude());
                 } else {
                     callbacks.unknownLocation();
@@ -1585,87 +2029,77 @@ public class RadioAudioService extends Service {
     }
 
     private void performPositionBeacon(final double latitude, final double longitude) {
-        if ("Current".equals(aprsBeaconFrequency)) {
+        if (CURRENT_FREQUENCY.equals(aprsBeaconFrequency)) {
             callbacks.startingAprsBeacon(activeFrequencyStr);
-            sendPositionBeacon(latitude, longitude, false);
+            sendPositionBeaconOnActiveChannel(latitude, longitude, activeFrequencyStr);
             return;
         }
 
-        // Frequency switch logic
-        final boolean wasScanning = getMode() == RadioMode.SCAN;
-        final int originalMemoryId = activeMemoryId;
-        final String originalFrequencyStr = activeFrequencyStr;
-        final int savedScanBaseSquelch = scanBaseSquelch;
-
-        callbacks.startingAprsBeacon(aprsBeaconFrequency);
-
-        if (wasScanning) {
-            cancelPendingScanAdvance();
+        final float beaconFrequency;
+        try {
+            beaconFrequency = Float.parseFloat(makeSafeHamFreq(aprsBeaconFrequency));
+        } catch (NumberFormatException e) {
+            Log.w(TAG, "Skipping position beacon: invalid beacon frequency " + aprsBeaconFrequency, e);
+            return;
+        }
+        if (!canTransmitOnFrequency(beaconFrequency) || !isTxAllowed()) {
+            Log.d(TAG, "Skipping position beacon: beacon frequency is not permitted for TX.");
+            return;
         }
 
-        tuneToFreq(aprsBeaconFrequency);
+        callbacks.startingAprsBeacon(aprsBeaconFrequency);
+        sendPositionBeaconOnSideChannel(latitude, longitude, beaconFrequency, aprsBeaconFrequency);
+    }
 
-        // Give it a moment to tune and stabilize
-        handler.postDelayed(() -> {
-            sendPositionBeacon(latitude, longitude, true);
+    private void sendPositionBeaconOnActiveChannel(final double latitude, final double longitude,
+                                                   final String beaconFrequency) {
+        sendPositionBeacon(latitude, longitude, null, beaconFrequency);
+    }
 
-            // Wait for transmission to finish before restoring
-            handler.postDelayed(() -> {
-                if (wasScanning) {
-                    activeMemoryId = originalMemoryId;
-                    scanBaseSquelch = savedScanBaseSquelch;
-                    setMode(RadioMode.SCAN);
-                    nextScan();
-                } else {
-                    if (originalMemoryId != -1) {
-                        tuneToMemory(originalMemoryId);
-                    } else {
-                        tuneToFreq(originalFrequencyStr);
-                    }
-                }
-            }, 3000); // 3 seconds for TX
-        }, 500); // 500ms for tuning
+    private void sendPositionBeaconOnSideChannel(final double latitude, final double longitude,
+                                                 final float txFrequency, final String beaconFrequency) {
+        sendPositionBeacon(latitude, longitude, txFrequency, beaconFrequency);
     }
 
     /**
      * Sends a position beacon via APRS.
-     * This method can only be called when the radio is in RX mode.
+     * Beaconing is blocked while scanning, including dedicated-frequency beacons.
      *
      * @param latitude  The latitude to beacon.
      * @param longitude The longitude to beacon.
-     * @param wasSwitch True if we switched frequencies for this beacon.
+     * @param txFrequency Frequency for a temporary TX override, or null for the active channel.
+     * @param beaconFrequency Display frequency for this beacon.
      */
-    private void sendPositionBeacon(final double latitude, final double longitude, final boolean wasSwitch) {
-        if (getMode() != RadioMode.RX) {
-            Log.d(TAG, "Skipping position beacon because not in RX mode");
+    private void sendPositionBeacon(final double latitude, final double longitude, final Float txFrequency,
+                                    final String beaconFrequency) {
+        if (!AprsRfFrequencyPolicy.allowsMode(getMode())) {
+            Log.d(TAG, "Skipping position beacon because mode does not allow this beacon frequency");
             return;
         }
-        Log.i(TAG, "Beaconing position via APRS");
         final boolean isApprox = aprsPositionAccuracy == APRS_POSITION_APPROX;
-        final Position myPos = new Position(
-            isApprox ? Math.round(latitude * 100.0) / 100.0 : latitude,
-            isApprox ? Math.round(longitude * 100.0) / 100.0 : longitude,
-            0, '/', aprsPositionIcon.getCode());
-        try {
-            final PositionField posField = new PositionField(("=" + myPos.toCompressedString()).getBytes(), "", 1);
-            final APRSPacket aprsPacket = new APRSPacket(callsign, DEFAULT_DIGIPEATERS, posField.getRawBytes());
-            aprsPacket.getPayload().addAprsData(APRSTypes.T_POSITION, posField);
-            txAX25Packet(new Packet(aprsPacket.toAX25Frame()));
-            callbacks.sentAprsBeacon(myPos.getLatitude(), myPos.getLongitude(), activeFrequencyStr, wasSwitch);
-        } catch (Exception e) {
-            Log.w(TAG, "Exception while trying to beacon APRS location.", e);
-        }
-    }
-
-    /**
-     * Sends an acknowledgment message to the specified target callsign.
-     *
-     * @param to    The callsign of the recipient.
-     * @param remoteMessageNum  The message number to acknowledge.
-     */
-    public void sendAckMessage(String to, String remoteMessageNum) {
-        APRSPacket aprsPacket = new APRSPacket(callsign, DEFAULT_DIGIPEATERS, MessagePacket.createMessagePayload(to, "ack" + remoteMessageNum, null));
-        txAX25Packet(new Packet(aprsPacket.toAX25Frame()));
+        final double beaconLatitude = isApprox ? Math.round(latitude * 100.0) / 100.0 : latitude;
+        final double beaconLongitude = isApprox ? Math.round(longitude * 100.0) / 100.0 : longitude;
+        final BeaconData beacon = BeaconData.builder()
+            .latitude(beaconLatitude).longitude(beaconLongitude)
+            .symbolTable('/').symbolCode(aprsPositionIcon.getCode())
+            .messagingCapable(true).compressed(true).build();
+        executeAprs(() -> {
+            boolean accepted = false;
+            try {
+                aprsBeaconTxOverrideMhz = txFrequency;
+                accepted = aprsController.submitPositionBeacon(beacon);
+                if (!accepted) Log.d(TAG, "Position beacon was not accepted");
+            } catch (RuntimeException e) {
+                // A persistence failure after RF submission must not trigger an automatic resend.
+                Log.w(TAG, "Unable to submit or record APRS position beacon", e);
+            } finally {
+                aprsBeaconTxOverrideMhz = null;
+            }
+            final boolean sent = accepted;
+            handler.post(() -> {
+                if (sent) callbacks.sentAprsBeacon(beaconLatitude, beaconLongitude, beaconFrequency, false);
+            });
+        });
     }
 
     /**
@@ -1673,143 +2107,50 @@ public class RadioAudioService extends Service {
      *
      * @param to   The callsign of the recipient, or null for BLN1CQ.
      * @param text The message text to send.
-     * @return The message number if sent successfully, -1 on error.
      */
-    public int sendChatMessage(String to, String text) {
+    public void sendChatMessage(String to, String text) {
         // Sanitize message text
         final String outText = text.replace('|', ' ').replace('~', ' ').replace('{', ' ');
         final String targetCallsign = (to == null || to.trim().isEmpty()) ? "BLN1CQ" : to;
         if (callsign.trim().isEmpty()) {
             Log.d(TAG, "Error: Tried to send message with no sender callsign.");
-            return -1;
-        }
-        // Create message and digipeater path
-        if (messageNumber > APRS_MAX_MESSAGE_NUM) {
-            messageNumber = 0;
-        }
-        try {
-            APRSPacket aprsPacket = new APRSPacket(callsign, DEFAULT_DIGIPEATERS, MessagePacket.createMessagePayload(targetCallsign, outText, String.valueOf(messageNumber++)));
-            Packet ax25Packet = new Packet(aprsPacket.toAX25Frame());
-            txAX25Packet(ax25Packet);
-        } catch (IllegalArgumentException e) {
-            Log.e(TAG, "Error: sending APRS packet", e);
-            callbacks.chatError(e.getMessage());
-            return -1;
-        }
-        return messageNumber - 1;
-    }
-
-    private String computeDigipeatDedupKey(APRSPacket packet) {
-        return packet.getSourceCall() + "|" + packet.getDestinationCall() + "|"
-            + java.util.Base64.getEncoder().encodeToString(packet.getPayload().getRawBytes());
-    }
-
-    private boolean isRecentlyDigipeated(String key) {
-        long now = System.currentTimeMillis();
-        Long then = digipeatDedupCache.get(key);
-        if (then != null && now - then < 28_000L) {
-            return true;
-        }
-        digipeatDedupCache.entrySet().removeIf(e -> now - e.getValue() >= 28_000L);
-        return false;
-    }
-
-    private void maybeDigipeat(APRSPacket aprsPacket, String dedupKey) {
-        java.util.List<Digipeater> digis = aprsPacket.getDigipeaters();
-        if (digis == null || digis.isEmpty()) {
             return;
         }
-
-        int firstUnusedIndex = -1;
-        for (int i = 0; i < digis.size(); i++) {
-            if (!digis.get(i).isUsed()) {
-                firstUnusedIndex = i;
-                break;
+        final Long frequencyHz = activeTxFrequencyHz();
+        executeAprs(() -> {
+            try {
+                if (!aprsController.postMessage(targetCallsign, outText, frequencyHz)) {
+                    Log.d(TAG, "Outgoing APRS message was not accepted");
+                    handler.post(() -> callbacks.chatError(getString(R.string.aprs_message_not_accepted)));
+                }
+            } catch (RuntimeException e) {
+                // Do not resend after a persistence failure: the frame may already be submitted.
+                Log.e(TAG, "Unable to submit or record outgoing APRS message", e);
+                handler.post(() -> callbacks.chatError(e.getMessage()));
             }
-        }
-        if (firstUnusedIndex < 0) {
-            return;
-        }
-
-        Digipeater firstUnused = digis.get(firstUnusedIndex);
-        String digiCall = firstUnused.getCallsign();
-        String baseCall = APRSPacket.getBaseCall(digiCall);
-        String ssidStr = APRSPacket.getSsid(firstUnused.toString());
-        int ssid = -1;
-        try {
-            ssid = Integer.parseInt(ssidStr);
-        } catch (NumberFormatException e) {
-            // SSID not numeric
-        }
-
-        boolean isOurCall = baseCall.equalsIgnoreCase(APRSPacket.getBaseCall(callsign));
-
-        // We check for WIDE1 with additional repeats left. WIDE1 is for local fill-in digipeaters, like us.
-        // We don't want to digipeat WIDE2 because that's for things like mountain-top digipeaters.
-        boolean isWide1Alias = baseCall.equalsIgnoreCase("WIDE1") && ssid >= 1 && ssid <= 2;
-
-        if (!isOurCall && !isWide1Alias) {
-            return;
-        }
-
-        java.util.List<Digipeater> newDigis = new java.util.ArrayList<>(digis);
-
-        if (isOurCall) {
-            Digipeater marked = new Digipeater(digiCall);
-            marked.setUsed(true);
-            newDigis.set(firstUnusedIndex, marked);
-        } else if (isWide1Alias) {
-            if (ssid == 1) {
-                Digipeater ourDigi = new Digipeater(callsign);
-                ourDigi.setUsed(true);
-                newDigis.set(firstUnusedIndex, ourDigi);
-            } else if (ssid == 2) {
-                Digipeater decremented = new Digipeater(baseCall + "-1");
-                decremented.setUsed(false);
-                newDigis.set(firstUnusedIndex, decremented);
-                Digipeater ourDigi = new Digipeater(callsign);
-                ourDigi.setUsed(true);
-                newDigis.add(firstUnusedIndex, ourDigi);
-            }
-        }
-
-        try {
-            APRSPacket digipeatedPacket = new APRSPacket(
-                aprsPacket.getSourceCall(),
-                aprsPacket.getDestinationCall(),
-                newDigis,
-                aprsPacket.getPayload().getRawBytes()
-            );
-            digipeatedPacket.setComment(aprsPacket.getComment());
-            txAX25Packet(new Packet(digipeatedPacket.toAX25Frame()));
-            digipeatDedupCache.put(dedupKey, System.currentTimeMillis());
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to digipeat packet", e);
-        }
+        });
     }
 
-    /**
-     * Sends an AX.25 packet to the ESP32 for transmission.
-     * Firmware handles AFSK modulation so the Android app does not need to stream packet audio.
-     *
-     * @param ax25Packet The AX.25 packet to send.
-     */
-    private void txAX25Packet(Packet ax25Packet) {
-        if (!isTxAllowed()) {
-            Log.e(TAG, "Tried to send an AX.25 packet when tx is not allowed, did not send.");
-            return;
+    // Radio transport and TX safety belong to the service, not its APRS callback adapter.
+    @SuppressWarnings("java:S3398")
+    private boolean txAX25PacketOnFrequency(Packet ax25Packet, float txFrequency) {
+        if (!isTxAllowed() || !canTransmitOnFrequency(txFrequency)) {
+            Log.e(TAG, "Tried to send an AX.25 packet on a disallowed frequency, did not send.");
+            return false;
         }
-        if (getMode() != RadioMode.RX) {
-            Log.e(TAG, "Tried to send an AX.25 packet when radio was not in RX mode, did not send.");
-            return;
+        if (!AprsRfFrequencyPolicy.allowsMode(getMode())) {
+            Log.e(TAG, "Tried to send an AX.25 packet in an unsupported mode, did not send.");
+            return false;
         }
-        if (hostToEsp32 == null) {
+        Protocol.Sender sender = hostToEsp32;
+        if (sender == null) {
             Log.e(TAG, "Tried to send AX.25 packet with no ESP32 connection.");
-            return;
+            return false;
         }
-        Log.d(TAG, "Sending AX25 packet: " + ax25Packet);
-        hostToEsp32.txAx25(ax25Packet.bytesWithoutCRC());
-        Log.i(TAG, "Send AX25 packet: " + ax25Packet);
+        sender.txAx25OnFrequency(txFrequency, radioModule.getDesiredBandwidth(), radioModule.getDesiredTxTone(),
+            ax25Packet.bytesWithoutCRC());
+        Log.i(TAG, "Send AX25 packet on " + txFrequency + " MHz: " + ax25Packet);
+        return true;
     }
 
     public int getAudioTrackSessionId() {
