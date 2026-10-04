@@ -33,16 +33,34 @@ private func echo(_ d: HostDesiredState, appliedSequence: UInt32? = nil, lastErr
         radioModuleStatus: RADIO_STATUS_FOUND, mode: 1, lastError: lastError, rssi: 100)
 }
 
+private func makeHello(rfModuleType: UInt8, deviceState: DeviceStateFrame) -> HelloFrame {
+    HelloFrame(
+        firmwareVersion: 17, radioModuleFound: true, windowSize: 1024,
+        rfModuleType: rfModuleType,
+        minFreq: rfModuleType == 0 ? 134 : 400, maxFreq: rfModuleType == 0 ? 174 : 480,
+        features: 0, deviceState: deviceState)
+}
+
 // Controller seeded from `seed`, transport attached and ready. The post-seed
 // flush always emits one frame (the STATUS_REPORTS re-enable), so tests start
-// from sent.frames.count == 1.
-private func makeReadyController(seed: DeviceStateFrame = makeDeviceState()) -> (RadioModuleController, SentFrames) {
+// from sent.frames.count == 1. `rfModuleType` seeds a HELLO (band plan).
+private func makeReadyController(
+    seed: DeviceStateFrame = makeDeviceState(),
+    rfModuleType: UInt8? = nil
+) -> (RadioModuleController, SentFrames) {
     let controller = RadioModuleController()
     let sent = SentFrames()
     controller.attachTransport { sent.frames.append($0) }
+    if let rfModuleType {
+        controller.seedFirmwareInfo(makeHello(rfModuleType: rfModuleType, deviceState: seed))
+    }
     controller.seedFromDeviceState(seed)
     controller.markTransportReady()
     return (controller, sent)
+}
+
+private func hasFlag(_ state: HostDesiredState?, _ flag: UInt16) -> Bool {
+    state.map { $0.flags & flag != 0 } ?? false
 }
 
 struct RadioModuleControllerTests {
@@ -204,6 +222,122 @@ struct RadioModuleControllerTests {
         controller.markTransportReady()
         #expect(sent.frames.count == 1)
         #expect(sent.frames[0].squelch == 8)
+    }
+
+    // MARK: TX_ALLOWED band gate
+
+    @Test func txAllowedFollowsTxFrequency() {
+        let (controller, sent) = makeReadyController(rfModuleType: 0)
+        // Seeded in band: the post-HELLO flush grants TX.
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(controller.isTxAllowed)
+
+        controller.setTxFrequency(156.8)  // marine ch 16
+        #expect(sent.frames.count == 2)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(!controller.isTxAllowed)
+
+        controller.setTxFrequency(147.0)
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(controller.isTxAllowed)
+    }
+
+    @Test func repeaterOffsetOutOfBandWithholdsTxInSameFrame() {
+        let (controller, sent) = makeReadyController(rfModuleType: 0)
+        controller.beginUpdate()
+        controller.setRxFrequency(147.99)
+        controller.setTxFrequency(147.99 + 0.6)
+        controller.endUpdate()
+        #expect(sent.frames.count == 2)
+        #expect(sent.frames[1].freqRx == 147.99)
+        #expect(!hasFlag(sent.frames[1], HOST_STATE_TX_ALLOWED))
+    }
+
+    @Test func bandwidthChangeRederivesTxAllowed() {
+        // 147.990 clears the 148.000 edge by 10 kHz: inside a 12.5 kHz
+        // channel's half-width, not a 25 kHz one's.
+        let seed = makeDeviceState(bw: DRA818_25K, freqTx: 147.99, freqRx: 147.99)
+        let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 0)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+
+        controller.setBandwidth(DRA818_12K5)
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+
+        controller.setBandwidth(DRA818_25K)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+    }
+
+    @Test func persistedTxAllowedClearedWhenSeedIsOutOfBand() {
+        // Firmware restores TX_ALLOWED from NVS at boot.
+        let seed = makeDeviceState(
+            flags: HOST_STATE_RADIO_CONFIG_VALID | HOST_STATE_TX_ALLOWED,
+            freqTx: 162.55, freqRx: 162.55)
+        let (_, sent) = makeReadyController(seed: seed, rfModuleType: 0)
+        #expect(sent.frames.count == 1)
+        #expect(!hasFlag(sent.frames[0], HOST_STATE_TX_ALLOWED))
+    }
+
+    @Test func noTxAllowedWithoutHello() {
+        let seed = makeDeviceState(flags: HOST_STATE_RADIO_CONFIG_VALID | HOST_STATE_TX_ALLOWED)
+        let (controller, sent) = makeReadyController(seed: seed)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(!controller.canTransmit(onFrequency: 146.52))
+    }
+
+    @Test func pttWithheldOutOfBand() {
+        let seed = makeDeviceState(freqTx: 151.82, freqRx: 151.82)  // MURS
+        let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 0)
+        let count = sent.frames.count
+        controller.pttDown()
+        #expect(sent.frames.count == count)  // nothing to send
+        #expect(!hasFlag(controller.desiredState, HOST_STATE_PTT_REQUESTED))
+
+        controller.beginUpdate()
+        controller.setRxFrequency(146.52)
+        controller.setTxFrequency(146.52)
+        controller.pttDown()
+        controller.endUpdate()
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
+    }
+
+    @Test func outOfBandTuneDropsHeldPtt() {
+        let (controller, sent) = makeReadyController(rfModuleType: 0)
+        controller.pttDown()
+        #expect(hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
+
+        controller.setTxFrequency(150.0)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
+
+        // Back in band, the dropped PTT stays dropped.
+        controller.setTxFrequency(146.52)
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
+    }
+
+    @Test func uhfModuleUsesSeventyCentimeterLimits() {
+        let seed = makeDeviceState(freqTx: 446.0, freqRx: 446.0)
+        let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 1)
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(controller.canTransmit(onFrequency: 432.1))
+        #expect(!controller.canTransmit(onFrequency: 146.52))
+
+        controller.setTxFrequency(462.5625)  // FRS/GMRS
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+    }
+
+    @Test func adoptedDeviceStateRederivesTxAllowed() {
+        let (controller, sent) = makeReadyController(rfModuleType: 0)
+        let count = sent.frames.count
+        // Firmware jumps ahead with an out-of-band tune still flagged TX_ALLOWED.
+        controller.updateDeviceState(makeDeviceState(
+            seq: 50,
+            flags: HOST_STATE_RADIO_CONFIG_VALID | HOST_STATE_TX_ALLOWED,
+            freqTx: 155.0, freqRx: 155.0))
+        #expect(sent.frames.count == count + 1)
+        #expect(sent.frames.last?.freqTx == 155.0)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
     }
 }
 

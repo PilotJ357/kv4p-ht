@@ -274,7 +274,7 @@ struct APRSDetailView: View {
 
     private var canResend: Bool {
         live.isOutgoing && live.kind == .message && !live.wasAcknowledged &&
-        store.ble.bleState == .ready
+        store.ble.bleState == .ready && !store.isTxOutOfBand
     }
 
     var body: some View {
@@ -409,7 +409,7 @@ struct APRSComposeView: View {
 
     private var canSend: Bool {
         !messageText.trimmingCharacters(in: .whitespaces).isEmpty &&
-        store.ble.bleState == .ready &&
+        store.ble.bleState == .ready && !store.isTxOutOfBand &&
         !store.callsign.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
@@ -444,7 +444,11 @@ struct APRSComposeView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
 
-            if sendFailed {
+            if store.isTxOutOfBand {
+                Text("Current frequency is outside the amateur band — receive only.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(t.red)
+            } else if sendFailed {
                 Text("Couldn't send — check connection and callsign.")
                     .font(.system(size: 13))
                     .foregroundStyle(t.red)

@@ -806,6 +806,7 @@ struct BeaconSettingsView: View {
             case .sent:       beaconStatus = "Beacon sent"
             case .noLocation: beaconStatus = "Waiting for GPS fix — try again"
             case .notReady:   beaconStatus = "Not connected or no callsign set"
+            case .outOfBand:  beaconStatus = "Not sent — beacon frequency is outside the amateur band"
             case .noConsent:  beaconStatus = nil
             }
         }

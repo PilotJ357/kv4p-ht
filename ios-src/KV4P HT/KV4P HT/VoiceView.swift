@@ -143,6 +143,10 @@ private struct RadioStage: View {
         store.rxMode == .tx
     }
 
+    private var txBlocked: Bool {
+        store.isTxOutOfBand
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Mode chip
@@ -213,8 +217,9 @@ private struct RadioStage: View {
             // PTT + controls row
             HStack(spacing: 24) {
                 if store.stickyPTT {
-                    PTTButton(isDown: stickyPttActive)
+                    PTTButton(isDown: stickyPttActive, rxOnly: txBlocked)
                         .onTapGesture {
+                            guard !txBlocked else { return }
                             stickyPttActive.toggle()
                             store.sendRadioState(
                                 freq: Float(freq) ?? 146.52,
@@ -222,7 +227,7 @@ private struct RadioStage: View {
                             )
                         }
                 } else {
-                    PTTButton(isDown: pttDown)
+                    PTTButton(isDown: pttDown, rxOnly: txBlocked)
                         .gesture(
                             LongPressGesture(minimumDuration: 0.01)
                                 .sequenced(before: DragGesture(minimumDistance: 0))
@@ -234,10 +239,11 @@ private struct RadioStage: View {
                                     )
                                 }
                         )
+                        .allowsHitTesting(!txBlocked)
                         .onChange(of: pttDown) { _, down in
                             store.sendRadioState(
                                 freq: Float(freq) ?? 146.52,
-                                ptt: down
+                                ptt: down && !txBlocked
                             )
                         }
                 }
@@ -276,6 +282,11 @@ private struct RadioStage: View {
             .padding(.horizontal, 20)
         }
         .padding(.bottom, 8)
+        // The controller already dropped PTT for the out-of-band tune; unlatch
+        // sticky PTT so it doesn't show ON AIR or carry over once back in band.
+        .onChange(of: txBlocked) { _, blocked in
+            if blocked { stickyPttActive = false }
+        }
         .sheet(isPresented: $showNumpad) {
             FreqNumpad(store: store, currentFreq: freq)
                 .environment(\.theme, store.theme)
@@ -442,10 +453,16 @@ private struct OffsetToneSheet: View {
 struct PTTButton: View {
     @Environment(\.theme) var t
     var isDown: Bool
+    // TX frequency is outside the amateur band; the button is inert.
+    var rxOnly: Bool = false
 
-    private var ringColor: Color { isDown ? t.red : t.accent }
+    private var onAir: Bool { isDown && !rxOnly }
+    private var ringColor: Color { rxOnly ? t.label3 : (onAir ? t.red : t.accent) }
+    private var labelColor: Color { rxOnly ? t.label2 : .white }
     private var grad: LinearGradient {
-        if isDown {
+        if rxOnly {
+            return LinearGradient(colors: [t.fill, t.fill2], startPoint: .top, endPoint: .bottom)
+        } else if onAir {
             return LinearGradient(colors: [Color(hex: "FF6B61"), t.red], startPoint: .top, endPoint: .bottom)
         } else {
             return LinearGradient(colors: [t.isDark ? Color(hex: "3A9BFF") : Color(hex: "3F96FF"), t.accent], startPoint: .top, endPoint: .bottom)
@@ -456,31 +473,32 @@ struct PTTButton: View {
         ZStack {
             Circle()
                 .stroke(ringColor, lineWidth: 2)
-                .opacity(isDown ? 0.5 : 0.22)
+                .opacity(onAir ? 0.5 : 0.22)
                 .frame(width: 168, height: 168)
             Circle()
                 .stroke(ringColor, lineWidth: 1.5)
-                .opacity(isDown ? 0.35 : 0.14)
+                .opacity(onAir ? 0.35 : 0.14)
                 .frame(width: 148, height: 148)
             Circle()
                 .fill(grad)
                 .frame(width: 132, height: 132)
-                .shadow(color: isDown ? t.red.opacity(0.53) : t.accent.opacity(0.27), radius: 22)
+                .shadow(color: rxOnly ? .clear : (onAir ? t.red.opacity(0.53) : t.accent.opacity(0.27)), radius: 22)
                 .shadow(color: Color.black.opacity(0.35), radius: 15, y: 10)
                 .overlay(
                     VStack(spacing: 5) {
-                        Image(systemName: "mic.fill")
+                        Image(systemName: rxOnly ? "mic.slash.fill" : "mic.fill")
                             .font(.system(size: 36, weight: .medium))
-                            .foregroundStyle(.white)
-                        Text(isDown ? "ON AIR" : "HOLD")
+                            .foregroundStyle(labelColor)
+                        Text(rxOnly ? "RX ONLY" : (onAir ? "ON AIR" : "HOLD"))
                             .font(.system(size: 11.5, weight: .heavy))
                             .tracking(1.2)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(labelColor)
                     }
                 )
         }
-        .scaleEffect(isDown ? 0.97 : 1.0)
-        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isDown)
+        .scaleEffect(onAir ? 0.97 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: onAir)
+        .accessibilityLabel(rxOnly ? "Receive only: outside the amateur band" : "Push to talk")
     }
 }
 
@@ -634,6 +652,7 @@ private struct FreqNumpad: View {
 
     @State private var digits: String
     @State private var hasEdited = false
+    @State private var rangeError: String?
 
     private static let maxDigits = 7
 
@@ -650,8 +669,15 @@ private struct FreqNumpad: View {
         return "\(mhz).\(khz)"
     }
 
+    // Any frequency the module tunes (from HELLO) is fine to receive on; TX
+    // is band-gated separately by the controller.
     private func commit() {
         guard let f = Float(displayText) else { return }
+        let lo = store.radio.minRadioFreq, hi = store.radio.maxRadioFreq
+        guard f >= lo && f <= hi else {
+            rangeError = String(format: "Out of range: %.3f–%.3f MHz", lo, hi)
+            return
+        }
         store.sendRadioState(freq: f, ptt: false)
         dismiss()
     }
@@ -666,11 +692,11 @@ private struct FreqNumpad: View {
                 VStack(spacing: 2) {
                     Text(displayText)
                         .font(.system(size: 48, weight: .bold, design: .monospaced))
-                        .foregroundStyle(t.label)
+                        .foregroundStyle(rangeError == nil ? t.label : t.red)
                         .contentTransition(.numericText())
-                    Text("MHz")
+                    Text(rangeError ?? "MHz")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(t.label2)
+                        .foregroundStyle(rangeError == nil ? t.label2 : t.red)
                 }
                 .padding(.bottom, 28)
 
@@ -720,6 +746,7 @@ private struct FreqNumpad: View {
     }
 
     private func tap(_ key: String) {
+        rangeError = nil
         switch key {
         case "⌫":
             guard !digits.isEmpty else { return }
