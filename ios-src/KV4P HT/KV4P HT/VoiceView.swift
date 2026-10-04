@@ -62,11 +62,13 @@ struct VoiceView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(store: store)
-                .environment(\.theme, store.theme)
-                .preferredColorScheme(store.theme.isDark ? .dark : .light)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+            NavigationStack {
+                SettingsView(store: store, backLabel: "Voice")
+            }
+            .environment(\.theme, store.theme)
+            .preferredColorScheme(store.theme.isDark ? .dark : .light)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .onChange(of: store.voiceMode) { _, mode in
             if mode != .scan { store.stopScan() }
