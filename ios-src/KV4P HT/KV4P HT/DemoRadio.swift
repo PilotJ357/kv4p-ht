@@ -15,6 +15,12 @@ nonisolated final class DemoRadio: @unchecked Sendable {
     static let deviceName = "kv4p HT Demo"
     // Apple Park — App Review's likely location when the phone has no fix.
     static let defaultCenter = CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090)
+    // Base callsigns of the fictional stations emitNextPacket() plays back.
+    // Not valid amateur calls, so they can't collide with real traffic.
+    static let stationCallsigns: Set<String> = ["DEMO", "DEMO1", "DEMO2", "DEMO3", "DEMO4", "DEMOWX"]
+    // Canned reply to outgoing messages; sent as whatever callsign was addressed.
+    static let replyText = "Copy that! 73 from the demo station"
+    static let replyMsgNumPrefix = "D"
 
     var onDeviceState: ((DeviceStateFrame) -> Void)?
     var onAx25Frame: ((Data) -> Void)?
@@ -93,10 +99,10 @@ nonisolated final class DemoRadio: @unchecked Sendable {
         }
         // Random msgNum: the app dedupes directed messages on (source, msgNum)
         // across sessions.
-        let replyNum = "D\(Int.random(in: 1000...9999))"
+        let replyNum = Self.replyMsgNumPrefix + String(Int.random(in: 1000...9999))
         after(replyDelays.reply) { [weak self] in
             self?.emit(from: peer, payload: messagePayload(
-                to: me, text: "Copy that! 73 from the demo station", msgNum: replyNum))
+                to: me, text: Self.replyText, msgNum: replyNum))
         }
     }
 

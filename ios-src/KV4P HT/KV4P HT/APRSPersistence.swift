@@ -293,6 +293,55 @@ final class APRSPersistence {
         return (try? context.fetch(req))?.first
     }
 
+    // MARK: - Demo cleanup
+
+    // Deletes demo traffic that builds before demo isolation persisted: the
+    // fictional stations' entries and frames, our messages and acks to them,
+    // and the demo's canned replies (sent as whatever callsign the user
+    // messaged). Current builds keep demo traffic in an in-memory store.
+    func purgeDemoTraffic() {
+        func isDemoStation(_ call: Any?) -> Bool {
+            guard let call = call as? String else { return false }
+            return DemoRadio.stationCallsigns.contains(NotifyGate.baseCallsign(call))
+        }
+        func isDemoReply(text: Any?, msgNum: Any?) -> Bool {
+            text as? String == DemoRadio.replyText
+                && (msgNum as? String)?.hasPrefix(DemoRadio.replyMsgNumPrefix) == true
+        }
+
+        let entryReq = NSFetchRequest<NSManagedObject>(entityName: Self.entryEntity)
+        entryReq.predicate = NSPredicate(
+            format: "fromCallsign BEGINSWITH %@ OR toCallsign BEGINSWITH %@ OR text == %@",
+            "DEMO", "DEMO", DemoRadio.replyText)
+        let entries = ((try? context.fetch(entryReq)) ?? []).filter {
+            isDemoStation($0.value(forKey: "fromCallsign"))
+                || isDemoStation($0.value(forKey: "toCallsign"))
+                || isDemoReply(text: $0.value(forKey: "text"), msgNum: $0.value(forKey: "msgNum"))
+        }
+
+        // Messages and acks carry the addressee in the payload, not the header.
+        let frameReq = NSFetchRequest<NSManagedObject>(entityName: Self.frameEntity)
+        frameReq.predicate = NSPredicate(
+            format: "source BEGINSWITH %@ OR kind IN %@", "DEMO", ["message", "ack"])
+        let frames = ((try? context.fetch(frameReq)) ?? []).filter { row in
+            if isDemoStation(row.value(forKey: "source")) { return true }
+            guard let payload = row.value(forKey: "payload") as? Data,
+                  case let .message(target, body, msgNum, _, _) = parseAPRSPayload(payload)
+            else { return false }
+            return isDemoStation(target) || isDemoReply(text: body, msgNum: msgNum)
+        }
+
+        guard !entries.isEmpty || !frames.isEmpty else { return }
+        (entries + frames).forEach(context.delete)
+        save()
+    }
+
+    // Source callsign of every stored frame (tests / diagnostics).
+    func frameSources() -> [String] {
+        let req = NSFetchRequest<NSManagedObject>(entityName: Self.frameEntity)
+        return ((try? context.fetch(req)) ?? []).compactMap { $0.value(forKey: "source") as? String }
+    }
+
     // MARK: - Legacy migration
 
     // One-shot import of the pre-Core Data UserDefaults JSON blob.
