@@ -430,6 +430,17 @@ class RadioStore {
         return ds.freqTx - ds.freqRx
     }
 
+    // Where PTT would key (sendRadioState: VFO freq + offset) is outside the
+    // amateur band, so the controller withholds TX_ALLOWED and PTT. Built
+    // from observed state so the PTT button tracks it; false before HELLO.
+    var isTxOutOfBand: Bool {
+        guard let hello = ble.hello else { return false }
+        return !BandPlan.canTransmit(
+            onFrequency: currentFreq + vfoOffset,
+            bandwidth: bandwidth == 0 ? DRA818_25K : DRA818_12K5,
+            rfModuleType: hello.rfModuleType)
+    }
+
     var currentOffsetString: String {
         let offset = currentTxOffset
         if abs(offset) < 0.0005 { return "Simplex" }
@@ -581,6 +592,8 @@ class RadioStore {
     // a memory seeds them first via applyMemory.
     // simplexOverride: transmit on the RX frequency with no tone, without
     // touching the VFO fields (APRS frequency-switch beacons are simplex).
+    // TX_ALLOWED follows the resulting TX freq/bandwidth inside the
+    // controller, which also drops `ptt` when that's out of band.
     func sendRadioState(freq: Float? = nil, ptt: Bool = false, simplexOverride: Bool = false) {
         let rxFreq = freq ?? currentFreq
         radio.beginUpdate()
