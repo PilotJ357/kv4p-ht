@@ -447,16 +447,16 @@ class RadioStore {
             }
         }
 
-        speechManager.onRollingRestart = { [weak self] segmentID in
-            self?.appendNewCaptionLine(segmentID: segmentID)
+        // The analyzer session died while a continuous signal may still
+        // hold squelch open; no squelch transition will come, so retry on
+        // our own.
+        speechManager.onSessionFailed = { [weak self] in
+            self?.scheduleCaptionRetry()
         }
 
-        // The recognizer ended the segment (final result after a pause,
-        // error, model not ready) while a continuous signal may still hold
-        // squelch open; no squelch transition will come, so restart on our
-        // own: at once after a normal finish, after a delay on failure.
-        speechManager.onSegmentEnded = { [weak self] ending in
-            self?.scheduleCaptionRetry(after: ending)
+        // Language support is only known after an async check.
+        speechManager.onAvailabilityChanged = { [weak self] in
+            self?.refreshCaptionsStatus()
         }
 
         refreshCaptionsStatus()
@@ -471,10 +471,13 @@ class RadioStore {
             authorization: speechManager.authorizationStatus,
             supportsOnDevice: speechManager.supportsOnDeviceRecognition)
         if status != captionsStatus { captionsStatus = status }
-        if captionsStatus == .listening {
+        if captionsStatus == .listening, !captionsSuspended {
+            // Load the model before the first transmission arrives.
+            speechManager.startSession()
             startCaptionsIfReceiving()
         } else {
             stopCaptions()
+            speechManager.stopSession()
         }
     }
 
@@ -500,20 +503,15 @@ class RadioStore {
             _ = squelchGate.update(squelched: false, now: Date())
             appendNewCaptionLine(segmentID: segmentID)
         } else {
-            scheduleCaptionRetry(after: .startFailed)
+            scheduleCaptionRetry()
         }
     }
 
-    private func scheduleCaptionRetry(after ending: CaptionRestartPolicy.Ending) {
+    private func scheduleCaptionRetry() {
         captionRetryTask?.cancel()
         guard captionsStatus == .listening, !captionsSuspended, !isSquelched else { return }
-        let delay = CaptionRestartPolicy.delay(after: ending, retryDelay: Self.captionRetryDelay)
-        if delay == .zero {
-            startCaptionsIfReceiving()
-            return
-        }
         captionRetryTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
+            try? await Task.sleep(for: Self.captionRetryDelay)
             guard !Task.isCancelled else { return }
             self?.startCaptionsIfReceiving()
         }
@@ -683,6 +681,7 @@ class RadioStore {
         ble.setAudioSampleHook(nil)
         captionsSuspended = true
         stopCaptions()
+        speechManager.stopSession()
         // Ensure a monitoring Live Activity exists if we're connected — covers
         // the case where the link was already up before the activity could start
         // (start() is idempotent). It then renders on the Lock Screen.

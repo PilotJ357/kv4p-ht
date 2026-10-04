@@ -1,33 +1,29 @@
 import Speech
 import AVFoundation
+import Synchronization
 
+// Live captions on SpeechAnalyzer + SpeechTranscriber: one long-running,
+// on-device-only session while captions are listening. Audio is fed only
+// while a transmission is being received (startSegment/endSegment), and
+// each transmission's results are routed to its own caption line by audio
+// time (CaptionTimeline). No per-request time limit, so no rolling restarts.
 @MainActor
 class SpeechManager {
-    private var recognizer: SFSpeechRecognizer?
-    private var currentRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var currentTask: SFSpeechRecognitionTask?
-    private var segmentTimer: Timer?
-    // Segment currently accepting audio, if any.
+    private var localeIdentifier = "en-US"
+    // nil until checked; false when SpeechTranscriber can't do the language.
+    private var localeSupported: Bool?
+    private var sessionTask: Task<Void, Never>?
+    private var analyzer: SpeechAnalyzer?
+    // Session generation; results and failures from a stopped session are
+    // ignored.
+    private var sessionID = 0
+    private var timeline = CaptionTimeline()
     private var liveSegmentID: Int?
-    private var segmentGeneration = 0
-    // Segments whose audio has ended but whose final result hasn't arrived;
-    // the timeout cancels a task that never reports back.
-    private var drainingSegments: [Int: (task: SFSpeechRecognitionTask, timeout: Task<Void, Never>)] = [:]
-    // Per-segment caption text, kept across the recognizer's restarts
-    // after pauses (see TranscriptAccumulator).
-    private var transcripts: [Int: TranscriptAccumulator] = [:]
-    // Thread-safe reference for feeding samples from BLE queue
-    nonisolated(unsafe) private var activeRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var nextSegmentID = 0
+    // Transmission end that arrived before the analyzer was ready.
+    private var pendingFinalize: (time: CMTime, segmentID: Int)?
+    private let feed = AudioFeed()
 
-    private let audioFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: 16000,
-        channels: 1,
-        interleaved: false
-    )!
-
-    private static let rollingRestartSeconds: TimeInterval = 55
-    private static let drainTimeout: Duration = .seconds(5)
     private static let hamVocab = [
         "CQ", "QSO", "QTH", "QSL", "QRZ", "QRM", "QRN", "QRP", "QRO",
         "73", "88", "roger", "copy", "over", "out", "break", "breaker",
@@ -40,21 +36,21 @@ class SpeechManager {
         "ham", "amateur", "frequency", "megahertz", "kilohertz"
     ]
 
-    // All callbacks carry the segment ID returned by startSegment(), so
-    // results that arrive after a newer segment started still land on
-    // their own caption line.
+    // Text for a caption line changed.
     var onPartialResult: ((Int, String) -> Void)?
-    // The segment produced its last result (or was abandoned).
+    // A caption line's transmission ended and its text is final.
     var onSegmentFinalized: ((Int) -> Void)?
-    // A rolling restart started this new segment.
-    var onRollingRestart: ((Int) -> Void)?
-    // The live segment ended on its own (final result or error), not via
-    // endSegment()/rollingRestart().
-    var onSegmentEnded: ((CaptionRestartPolicy.Ending) -> Void)?
+    // The analyzer session failed; captions must be restarted.
+    var onSessionFailed: (() -> Void)?
+    // Language support became known (supportsOnDeviceRecognition changed).
+    var onAvailabilityChanged: (() -> Void)?
 
     func configure(language: String) {
-        let localeId = Self.mapLanguage(language)
-        recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeId))
+        let id = Self.mapLanguage(language)
+        guard id != localeIdentifier || localeSupported == nil else { return }
+        localeIdentifier = id
+        localeSupported = nil
+        stopSession()
     }
 
     func requestAuthorization(completion: @escaping (SFSpeechRecognizerAuthorizationStatus) -> Void) {
@@ -71,142 +67,175 @@ class SpeechManager {
 
     var isSegmentActive: Bool { liveSegmentID != nil }
 
-    // Captions are on-device only: without local support SFSpeechRecognizer
-    // would stream received audio to Apple's servers, so we don't run at all.
+    // SpeechTranscriber only runs on-device; it's unavailable on hardware
+    // without the neural engine support, or for unsupported languages.
     var supportsOnDeviceRecognition: Bool {
-        recognizer?.supportsOnDeviceRecognition ?? false
+        SpeechTranscriber.isAvailable && localeSupported != false
     }
 
-    // Returns the new segment's ID, or nil when the recognizer can't start
-    // right now (not authorized, unavailable, or on-device model not ready).
+    // Loads the model ahead of the first transmission. Idempotent.
+    func startSession() {
+        guard sessionTask == nil, authorizationStatus == .authorized,
+              supportsOnDeviceRecognition else { return }
+        sessionID += 1
+        let id = sessionID
+        // A new session's audio clock starts at zero.
+        timeline = CaptionTimeline()
+        let chunks = feed.attach()
+        sessionTask = Task { [weak self] in
+            await self?.runSession(id: id, chunks: chunks)
+        }
+    }
+
+    func stopSession() {
+        endSegment()
+        feed.detach()
+        sessionTask?.cancel()
+        sessionTask = nil
+        if let pending = pendingFinalize {
+            pendingFinalize = nil
+            onSegmentFinalized?(pending.segmentID)
+        }
+        if let analyzer {
+            Task { await analyzer.cancelAndFinishNow() }
+        }
+        analyzer = nil
+    }
+
+    func stopAll() {
+        stopSession()
+    }
+
+    // Starts feeding a new transmission. Returns its caption line's ID, or
+    // nil when captions can't run right now.
     @discardableResult
     func startSegment() -> Int? {
-        guard authorizationStatus == .authorized,
-              let recognizer, recognizer.isAvailable,
-              recognizer.supportsOnDeviceRecognition else { return nil }
+        startSession()
+        guard sessionTask != nil else { return nil }
         endSegment()
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        request.requiresOnDeviceRecognition = true
-        request.contextualStrings = Self.hamVocab
-        currentRequest = request
-        activeRequest = request
-
-        segmentGeneration += 1
-        let segmentID = segmentGeneration
-        currentTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            let text = result?.bestTranscription.formattedString
-            let firstWordStart = result?.bestTranscription.segments.first?.timestamp
-            let isFinal = result?.isFinal ?? false
-            let failed = result == nil && error != nil
-            Task { @MainActor in
-                guard let self, self.isTracked(segmentID) else { return }
-                if let text {
-                    var transcript = self.transcripts[segmentID] ?? TranscriptAccumulator()
-                    let display = isFinal
-                        ? transcript.final(text)
-                        : transcript.partial(text, firstWordStart: firstWordStart)
-                    self.transcripts[segmentID] = transcript
-                    self.onPartialResult?(segmentID, display)
-                }
-                if isFinal {
-                    self.segmentDidEnd(segmentID, .finished)
-                } else if failed {
-                    self.segmentDidEnd(segmentID, .failed)
-                }
-            }
-        }
-
+        nextSegmentID += 1
+        let segmentID = nextSegmentID
+        let start = feed.startRecording()
+        timeline.begin(id: segmentID, at: start.seconds)
         liveSegmentID = segmentID
-
-        segmentTimer?.invalidate()
-        segmentTimer = Timer.scheduledTimer(
-            withTimeInterval: Self.rollingRestartSeconds,
-            repeats: false
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.rollingRestart()
-            }
-        }
         return segmentID
     }
 
     nonisolated func feedSamples(_ samples: [Float], count: Int) {
-        guard count > 0 else { return }
-        let fmt = audioFormat
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(count)) else { return }
-        pcmBuffer.frameLength = AVAudioFrameCount(count)
-        if let channelData = pcmBuffer.floatChannelData {
-            samples.withUnsafeBufferPointer { src in
-                channelData[0].update(from: src.baseAddress!, count: count)
-            }
-        }
-        activeRequest?.append(pcmBuffer)
+        feed.append(samples, count: count)
     }
 
-    // Stops feeding the live segment and lets the recognizer finish the
-    // audio it already has. Cancelling here would discard that buffered
-    // tail, losing the end of every transmission.
+    // Stops feeding and asks the analyzer to finalize everything received,
+    // so the line's last words show without waiting for more audio.
     func endSegment() {
-        segmentTimer?.invalidate()
-        segmentTimer = nil
-        activeRequest = nil
-        guard let segmentID = liveSegmentID, let task = currentTask else {
-            liveSegmentID = nil
+        guard let segmentID = liveSegmentID else { return }
+        liveSegmentID = nil
+        let end = feed.stopRecording()
+        timeline.end(at: end.seconds)
+        guard let analyzer else {
+            pendingFinalize = (end, segmentID)
             return
         }
-        currentRequest?.endAudio()
-        task.finish()
-        currentRequest = nil
-        currentTask = nil
-        liveSegmentID = nil
-        let timeout = Task { [weak self] in
-            try? await Task.sleep(for: Self.drainTimeout)
-            guard !Task.isCancelled, let self,
-                  let draining = self.drainingSegments.removeValue(forKey: segmentID) else { return }
-            draining.task.cancel()
-            self.transcripts[segmentID] = nil
-            self.onSegmentFinalized?(segmentID)
-        }
-        drainingSegments[segmentID] = (task, timeout)
+        finalize(analyzer, through: end, segmentID: segmentID)
     }
 
-    func stopAll() {
-        endSegment()
-        recognizer = nil
-    }
-
-    private func rollingRestart() {
-        guard liveSegmentID != nil else { return }
-        endSegment()
-        if let segmentID = startSegment() {
-            onRollingRestart?(segmentID)
-        } else {
-            onSegmentEnded?(.startFailed)
+    private func finalize(_ analyzer: SpeechAnalyzer, through time: CMTime, segmentID: Int) {
+        Task { [weak self] in
+            try? await analyzer.finalize(through: time)
+            self?.onSegmentFinalized?(segmentID)
         }
     }
 
-    private func isTracked(_ segmentID: Int) -> Bool {
-        segmentID == liveSegmentID || drainingSegments[segmentID] != nil
-    }
+    private func runSession(id: Int, chunks: AsyncStream<AudioFeed.Chunk>) async {
+        do {
+            guard let locale = await SpeechTranscriber.supportedLocale(
+                equivalentTo: Locale(identifier: localeIdentifier)) else {
+                localeSupported = false
+                sessionTask = nil
+                onAvailabilityChanged?()
+                return
+            }
+            if localeSupported != true {
+                localeSupported = true
+            }
 
-    private func segmentDidEnd(_ segmentID: Int, _ ending: CaptionRestartPolicy.Ending) {
-        transcripts[segmentID] = nil
-        if segmentID == liveSegmentID {
-            segmentTimer?.invalidate()
-            segmentTimer = nil
-            activeRequest = nil
-            currentRequest = nil
-            currentTask = nil
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: [],
+                reportingOptions: [.volatileResults, .fastResults],
+                attributeOptions: [])
+            let modules: [any SpeechModule] = [transcriber]
+
+            // The model is a system asset; download it on first use.
+            if await AssetInventory.status(forModules: modules) < .installed,
+               let request = try await AssetInventory.assetInstallationRequest(supporting: modules) {
+                print("[Captions] downloading speech model for \(locale.identifier)")
+                try await request.downloadAndInstall()
+            }
+            _ = try? await AssetInventory.reserve(locale: locale)
+
+            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules) else {
+                throw CaptionsError.noAudioFormat
+            }
+            let analyzer = SpeechAnalyzer(
+                modules: modules,
+                options: .init(priority: .userInitiated, modelRetention: .lingering))
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = Self.hamVocab
+            try await analyzer.setContext(context)
+            try await analyzer.prepareToAnalyze(in: format)
+
+            let (inputs, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
+            try await analyzer.start(inputSequence: inputs)
+            try Task.checkCancellation()
+            self.analyzer = analyzer
+            print("[Captions] analyzer ready (\(locale.identifier), \(format.sampleRate) Hz)")
+
+            let pump = Task.detached {
+                let converter = AudioFeed.Converter(target: format)
+                for await chunk in chunks {
+                    if let input = converter.input(for: chunk) {
+                        inputContinuation.yield(input)
+                    }
+                }
+                inputContinuation.finish()
+            }
+            defer { pump.cancel() }
+
+            if let pending = pendingFinalize {
+                pendingFinalize = nil
+                finalize(analyzer, through: pending.time, segmentID: pending.segmentID)
+            }
+
+            for try await result in transcriber.results {
+                guard id == sessionID else { break }
+                let text = String(result.text.characters)
+                if let line = timeline.apply(text: text, start: result.range.start.seconds,
+                                             isFinal: result.isFinal) {
+                    onPartialResult?(line.id, line.text)
+                }
+            }
+            // Results only end when the session is stopped; anything else
+            // leaves captions dead, so treat it as a failure.
+            throw CaptionsError.sessionEnded
+        } catch {
+            guard id == sessionID, !Task.isCancelled else { return }
+            print("[Captions] analyzer session failed: \(error)")
+            for segmentID in [liveSegmentID, pendingFinalize?.segmentID].compactMap({ $0 }) {
+                onSegmentFinalized?(segmentID)
+            }
             liveSegmentID = nil
-            onSegmentFinalized?(segmentID)
-            onSegmentEnded?(ending)
-        } else if let draining = drainingSegments.removeValue(forKey: segmentID) {
-            draining.timeout.cancel()
-            onSegmentFinalized?(segmentID)
+            pendingFinalize = nil
+            feed.detach()
+            sessionTask = nil
+            analyzer = nil
+            onSessionFailed?()
         }
+    }
+
+    private enum CaptionsError: Error {
+        case noAudioFormat
+        case sessionEnded
     }
 
     private static func mapLanguage(_ language: String) -> String {
@@ -220,6 +249,115 @@ class SpeechManager {
         case "Japanese":     return "ja-JP"
         case "Portuguese":   return "pt-BR"
         default:             return "en-US"
+        }
+    }
+}
+
+// Hands received audio (BLE queue) to the analyzer session. Only audio fed
+// while recording advances the analyzer's timeline, so time positions are
+// cumulative received-audio time at the wire rate.
+nonisolated final class AudioFeed: Sendable {
+    struct Chunk: Sendable {
+        let samples: [Float]
+        let start: Int64
+    }
+
+    static let sampleRate: Double = 16000
+
+    private struct State {
+        var continuation: AsyncStream<Chunk>.Continuation?
+        var recording = false
+        var samplesFed: Int64 = 0
+    }
+
+    private let state = Mutex(State())
+
+    func attach() -> AsyncStream<Chunk> {
+        let (stream, continuation) = AsyncStream<Chunk>.makeStream()
+        state.withLock {
+            $0.continuation?.finish()
+            $0.continuation = continuation
+            $0.recording = false
+            $0.samplesFed = 0
+        }
+        return stream
+    }
+
+    func detach() {
+        state.withLock {
+            $0.continuation?.finish()
+            $0.continuation = nil
+            $0.recording = false
+        }
+    }
+
+    func startRecording() -> CMTime {
+        state.withLock {
+            $0.recording = true
+            return Self.time($0.samplesFed)
+        }
+    }
+
+    func stopRecording() -> CMTime {
+        state.withLock {
+            $0.recording = false
+            return Self.time($0.samplesFed)
+        }
+    }
+
+    func append(_ samples: [Float], count: Int) {
+        guard count > 0 else { return }
+        state.withLock {
+            guard $0.recording, let continuation = $0.continuation else { return }
+            continuation.yield(Chunk(samples: Array(samples.prefix(count)), start: $0.samplesFed))
+            $0.samplesFed += Int64(count)
+        }
+    }
+
+    static func time(_ samples: Int64) -> CMTime {
+        CMTime(value: samples, timescale: CMTimeScale(sampleRate))
+    }
+
+    // Converts 16 kHz mono Float32 chunks to the analyzer's format. Used
+    // from a single task only.
+    final class Converter {
+        private let source = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: AudioFeed.sampleRate,
+            channels: 1, interleaved: false)!
+        private let target: AVAudioFormat
+        private let converter: AVAudioConverter?
+
+        init(target: AVAudioFormat) {
+            self.target = target
+            converter = target == source ? nil : AVAudioConverter(from: source, to: target)
+        }
+
+        func input(for chunk: Chunk) -> AnalyzerInput? {
+            let count = chunk.samples.count
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: source, frameCapacity: AVAudioFrameCount(count)),
+                  let channel = buffer.floatChannelData else { return nil }
+            buffer.frameLength = AVAudioFrameCount(count)
+            chunk.samples.withUnsafeBufferPointer { channel[0].update(from: $0.baseAddress!, count: count) }
+            let startTime = AudioFeed.time(chunk.start)
+            guard let converter else {
+                return AnalyzerInput(buffer: buffer, bufferStartTime: startTime)
+            }
+            let ratio = target.sampleRate / source.sampleRate
+            let capacity = AVAudioFrameCount((Double(count) * ratio).rounded(.up)) + 32
+            guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+            var consumed = false
+            var error: NSError?
+            converter.convert(to: output, error: &error) { _, status in
+                if consumed {
+                    status.pointee = .noDataNow
+                    return nil
+                }
+                consumed = true
+                status.pointee = .haveData
+                return buffer
+            }
+            guard error == nil, output.frameLength > 0 else { return nil }
+            return AnalyzerInput(buffer: output, bufferStartTime: startTime)
         }
     }
 }

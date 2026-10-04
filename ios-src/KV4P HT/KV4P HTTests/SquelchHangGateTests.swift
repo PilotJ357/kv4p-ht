@@ -103,17 +103,3 @@ struct SquelchHangGateTests {
         #expect(action == .open)
     }
 }
-
-struct CaptionRestartPolicyTests {
-
-    // isFinal after a pause is normal on continuous WX audio; waiting
-    // would drop live audio.
-    @Test func normalFinishRestartsImmediately() {
-        #expect(CaptionRestartPolicy.delay(after: .finished, retryDelay: .seconds(2)) == .zero)
-    }
-
-    @Test func failuresBackOff() {
-        #expect(CaptionRestartPolicy.delay(after: .failed, retryDelay: .seconds(2)) == .seconds(2))
-        #expect(CaptionRestartPolicy.delay(after: .startFailed, retryDelay: .seconds(2)) == .seconds(2))
-    }
-}
