@@ -14,7 +14,7 @@ struct MoreView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(spacing: 4) {
+                VStack(spacing: 20) {
                     // Radio rows
                     ListGroupView {
                         Button { showDeviceInfo = true } label: {
