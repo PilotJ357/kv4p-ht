@@ -396,16 +396,20 @@ class APRSController {
 
     // MARK: - TX
 
-    private func canTransmit() -> Bool {
+    private func isReadyToTransmit() -> Bool {
         guard let store else { return false }
         return store.ble.bleState == .ready && myCallsign != nil
+    }
+
+    // Firmware silently drops AX.25 frames unless TX_ALLOWED is set, which
+    // the controller only grants while the current TX frequency is in band.
+    private func canTransmit() -> Bool {
+        isReadyToTransmit() && store?.radio.isTxAllowed == true
     }
 
     @discardableResult
     private func transmitPayload(_ payload: String) -> Bool {
         guard let store, let me = myCallsign else { return false }
-        // Firmware gates AX.25 TX on the TX_ALLOWED desired-state flag, which
-        // RadioModuleController keeps set after HELLO — no refresh needed.
         let frame = AX25Frame(source: me, payload: Data(payload.utf8))
         let raw = frame.encodedWithoutFCS()
         store.ble.sendAx25Frame(raw)
@@ -515,13 +519,18 @@ class APRSController {
     // MARK: - Position beacon
 
     enum BeaconResult {
-        case sent, noLocation, notReady, noConsent
+        case sent, noLocation, notReady, noConsent, outOfBand
     }
 
     func sendPositionBeacon() async -> BeaconResult {
         guard let store else { return .notReady }
         guard store.aprsBeaconConsented else { return .noConsent }
-        guard canTransmit() else { return .notReady }
+        guard isReadyToTransmit() else { return .notReady }
+        // A fixed beacon frequency is transmitted simplex on that frequency;
+        // "Current" goes out on the current TX frequency.
+        let beaconFreq = store.aprsBeaconFrequency == "Current" ? nil : Float(store.aprsBeaconFrequency)
+        guard beaconFreq.map({ store.radio.canTransmit(onFrequency: $0) }) ?? store.radio.isTxAllowed
+        else { return .outOfBand }
         guard let location = store.locationManager.location else {
             store.locationManager.requestLocation()
             return .noLocation
@@ -541,8 +550,7 @@ class APRSController {
             timestamp: Date(), lat: lat, lon: lon,
             symbolTable: "/", symbolCode: String(symbol), isOutgoing: true))
 
-        let beaconFreq = Float(store.aprsBeaconFrequency)
-        if let freq = beaconFreq, store.aprsBeaconFrequency != "Current" {
+        if let freq = beaconFreq {
             let originalFreq = store.currentFreq
             store.sendRadioState(freq: freq, simplexOverride: true)
             try? await Task.sleep(for: .milliseconds(500))
