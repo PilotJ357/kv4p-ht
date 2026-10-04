@@ -12,7 +12,7 @@ import CoreLocation
 /// Confined to the queue passed to init (BLEManager's bleQueue); callbacks
 /// fire on that queue.
 nonisolated final class DemoRadio: @unchecked Sendable {
-    static let deviceName = "kv4p HT Demo"
+    static let deviceName = "KV4P BLE Demo"
     // Apple Park — App Review's likely location when the phone has no fix.
     static let defaultCenter = CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090)
     // Base callsigns of the fictional stations emitNextPacket() plays back.
