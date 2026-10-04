@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 // MARK: - More Tab
 
@@ -646,8 +647,11 @@ private struct DeviceDetailRow: View {
 
 struct APRSNotificationsView: View {
     @Environment(\.theme) var t
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @Bindable var store: RadioStore
     @State private var authDenied = false
+    @State private var showDeniedAlert = false
 
     // Display order for the per-kind toggles.
     private static let kinds: [APRSPacketKind] =
@@ -665,19 +669,14 @@ struct APRSNotificationsView: View {
                             ? "Notifications are turned off for kv4p HT. Enable them in iOS Settings › Notifications."
                             : "Packets arrive while the app runs in the background (connected via Bluetooth)."
                     ) {
-                        ListRow(title: "Notify on APRS packets", isLast: true, dense: true,
-                                accessory: KVToggle(isOn: Binding(
-                                    get: { store.aprsNotify.enabled },
-                                    set: { on in
-                                        if on {
-                                            store.notifications.requestAuthorization { granted in
-                                                authDenied = !granted
-                                                store.aprsNotify.enabled = granted
-                                            }
-                                        } else {
-                                            store.aprsNotify.enabled = false
-                                        }
-                                    })) as (any View))
+                        ListRow(title: "Notify on APRS packets", isLast: !authDenied, dense: true,
+                                accessory: KVToggle(isOn: enabledBinding) as (any View))
+                        if authDenied {
+                            Button(action: openNotificationSettings) {
+                                ListRow(title: "Open iOS Settings", isLast: true, dense: true)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
 
                     ListGroupView(header: "Packet types") {
@@ -730,10 +729,52 @@ struct APRSNotificationsView: View {
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            store.notifications.authorizationStatus { status in
-                authDenied = store.aprsNotify.enabled && status == .denied
-            }
+        .onAppear(perform: refreshAuthStatus)
+        // Returning from iOS Settings: pick up a permission change.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshAuthStatus() }
+        }
+        .alert("Notifications are off", isPresented: $showDeniedAlert) {
+            Button("Open Settings", action: openNotificationSettings)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Notifications for kv4p HT were turned off. To get APRS packet alerts, allow notifications in iOS Settings.")
+        }
+    }
+
+    // iOS won't re-prompt once denied, so route to Settings instead of
+    // silently snapping the toggle back off.
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.aprsNotify.enabled },
+            set: { on in
+                guard on else {
+                    store.aprsNotify.enabled = false
+                    return
+                }
+                store.notifications.authorizationStatus { status in
+                    if status == .denied {
+                        authDenied = true
+                        showDeniedAlert = true
+                        return
+                    }
+                    store.notifications.requestAuthorization { granted in
+                        authDenied = !granted
+                        store.aprsNotify.enabled = granted
+                    }
+                }
+            })
+    }
+
+    private func refreshAuthStatus() {
+        store.notifications.authorizationStatus { status in
+            authDenied = status == .denied
+        }
+    }
+
+    private func openNotificationSettings() {
+        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+            openURL(url)
         }
     }
 
