@@ -11,23 +11,26 @@ let kvMono  = Font.system(size: 14, weight: .medium, design: .monospaced)
 struct DeviceStrip: View {
     @Environment(\.theme) var t
     var connected: Bool
+    var demo: Bool = false
     var battery: Int? = nil   // nil = no data from device yet
     var label: String = "kv4p HT"
     var action: () -> Void = {}
 
+    private var dotColor: Color { !connected ? t.red : demo ? t.amber : t.green }
+
     var body: some View {
         Button(action: action) { HStack(spacing: 8) {
             Circle()
-                .fill(connected ? t.green : t.red)
+                .fill(dotColor)
                 .frame(width: 7, height: 7)
-                .shadow(color: connected ? t.green : t.red, radius: 3)
+                .shadow(color: dotColor, radius: 3)
             Image(systemName: "antenna.radiowaves.left.and.right")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(t.label2)
-            Text(label)
+            Text(connected && demo ? "Demo radio" : label)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(t.label)
-            Text(connected ? "Connected" : "Disconnected")
+            Text(!connected ? "Disconnected" : demo ? "Simulated" : "Connected")
                 .font(.system(size: 13))
                 .foregroundStyle(t.label2)
             Spacer()
