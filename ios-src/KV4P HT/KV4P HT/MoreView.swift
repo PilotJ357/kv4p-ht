@@ -57,7 +57,7 @@ struct MoreView: View {
                         .buttonStyle(.plain)
                     }
 
-                    Text("kv4p HT · Open-source ham radio · GPLv3")
+                    Text("BLE HT · For KV4P BLE radios · GPLv3")
                         .font(.system(size: 12.5))
                         .foregroundStyle(t.label3)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -734,7 +734,7 @@ struct APRSNotificationsView: View {
                 VStack(spacing: 4) {
                     ListGroupView(
                         footer: authDenied
-                            ? "Notifications are turned off for kv4p HT. Enable them in iOS Settings › Notifications."
+                            ? "Notifications are turned off for BLE HT. Enable them in iOS Settings › Notifications."
                             : "Packets arrive while the app runs in the background (connected via Bluetooth)."
                     ) {
                         ListRow(title: "Notify on APRS packets", isLast: !authDenied, dense: true,
@@ -812,7 +812,7 @@ struct APRSNotificationsView: View {
             Button("Open Settings", action: openNotificationSettings)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Notifications for kv4p HT were turned off. To get APRS packet alerts, allow notifications in iOS Settings.")
+            Text("Notifications for BLE HT were turned off. To get APRS packet alerts, allow notifications in iOS Settings.")
         }
     }
 

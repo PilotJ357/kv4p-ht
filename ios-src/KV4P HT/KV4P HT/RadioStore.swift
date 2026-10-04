@@ -315,8 +315,10 @@ class RadioStore {
                 self.aprs.processDueRetries()
             }
         }
-        ble.onDeviceState = { [weak self] _ in
+        ble.onDeviceState = { [weak self] ds in
             guard let self else { return }
+            self.meterGate.deviceState(txActive: ds.mode == 0, at: Date())
+            self.refreshMeterGate()
             self.hydrateUISettingsFromAppliedState()
             self.ble.setRxAudioMuted(self.effectiveRxMuted)
         }
@@ -560,6 +562,32 @@ class RadioStore {
         ble.deviceState?.rssi ?? 0
     }
 
+    // True while the S-meter must read zero: PTT pressed (before the
+    // firmware echoes TX), TX applied, an APRS frame queued for the
+    // firmware to key, or the short hold after any of those ends.
+    private(set) var meterSuppressed = false
+    @ObservationIgnored private var meterGate = TxMeterGate()
+    @ObservationIgnored private var meterGateExpiry: Task<Void, Never>?
+
+    // APRSController calls this as it hands a frame to the firmware.
+    func notePacketTx() {
+        meterGate.packetQueued(at: Date())
+        refreshMeterGate()
+    }
+
+    private func refreshMeterGate() {
+        let now = Date()
+        let suppressed = meterGate.suppressed(at: now)
+        if suppressed != meterSuppressed { meterSuppressed = suppressed }
+        meterGateExpiry?.cancel()
+        guard let next = meterGate.nextExpiry(after: now) else { return }
+        meterGateExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(next.timeIntervalSince(now)))
+            guard !Task.isCancelled else { return }
+            self?.refreshMeterGate()
+        }
+    }
+
     // Applied TX offset from firmware state; preserves split TX/RX config
     // that has no matching memory.
     var currentTxOffset: Float {
@@ -625,6 +653,32 @@ class RadioStore {
         return abs(currentFreq - aprsFreq) < 0.0005
     }
 
+    // Standard regional APRS frequencies (mirrors the Settings picker).
+    static let knownAprsFrequencies: [Float] = [144.390, 144.575, 144.640, 144.660, 144.800, 145.175, 145.825]
+
+    // APRS counts as active when tuned to the configured APRS frequency or any
+    // standard one — covers the "Current" beacon setting too.
+    var isAprsActive: Bool {
+        isTunedToAprsFreq || Self.knownAprsFrequencies.contains { abs(currentFreq - $0) < 0.0005 }
+    }
+
+    // The Live Activity only shows APRS traffic, so it exists only while the
+    // radio is connected, the user has it enabled, and we're on an APRS freq.
+    // start()/end() are idempotent, so this is safe to call on any change.
+    // Mid-reconnect (scanning/connecting, no device state yet) leaves it as-is.
+    func syncLiveActivity() {
+        let state = ble.bleState
+        if state == .idle || !aprsNotify.liveActivityEnabled {
+            liveActivity.end()
+        } else if state == .ready, ble.deviceState != nil {
+            if isAprsActive {
+                liveActivity.start(enabled: true)
+            } else {
+                liveActivity.end()
+            }
+        }
+    }
+
     var isOnAprsFreq: Bool {
         silenceRxOnAprsFreq && isTunedToAprsFreq
     }
@@ -682,18 +736,18 @@ class RadioStore {
         captionsSuspended = true
         stopCaptions()
         speechManager.stopSession()
-        // Ensure a monitoring Live Activity exists if we're connected — covers
-        // the case where the link was already up before the activity could start
-        // (start() is idempotent). It then renders on the Lock Screen.
-        if ble.bleState == .ready {
-            liveActivity.start(enabled: aprsNotify.liveActivityEnabled)
-        }
+        // Ensure the Live Activity matches current state — covers the case
+        // where the link was already up before the activity could start. It
+        // then renders on the Lock Screen.
+        syncLiveActivity()
     }
 
     func enterForeground() {
         setupAudioSampleHook()
         ble.recoverAudioIfNeeded()
         captionsSuspended = false
+        // Settings may have changed location access while we were away.
+        locationManager.refresh()
         // Speech permission may have changed in Settings while away; also
         // resumes captions if a signal is still being received.
         refreshCaptionsStatus()
@@ -793,6 +847,8 @@ class RadioStore {
         radio.setHighPower(isHighPower)
         if ptt { radio.pttDown() } else { radio.pttUp() }
         radio.endUpdate()
+        meterGate.setPTT(ptt, at: Date())
+        refreshMeterGate()
     }
 
     func applyMemory(_ mem: Memory) {

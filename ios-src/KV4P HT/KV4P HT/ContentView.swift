@@ -101,15 +101,10 @@ struct ContentView: View {
         .onChange(of: store.pendingMapFocusID) { _, id in
             if id != nil { selectedTab = .map }
         }
-        .onChange(of: store.ble.bleState) { _, new in
-            // Start a monitoring Live Activity once the radio is ready; end it
-            // when the link drops.
-            if new == .ready {
-                store.liveActivity.start(enabled: store.aprsNotify.liveActivityEnabled)
-            } else if new == .idle {
-                store.liveActivity.end()
-            }
-        }
+        // APRS Live Activity: only while connected and tuned to an APRS freq.
+        .onChange(of: store.ble.bleState) { _, _ in store.syncLiveActivity() }
+        .onChange(of: store.isAprsActive) { _, _ in store.syncLiveActivity() }
+        .onChange(of: store.aprsNotify.liveActivityEnabled) { _, _ in store.syncLiveActivity() }
         .onOpenURL { url in
             if url.scheme == "kv4pht", url.host == "aprs" { selectedTab = .aprs }
         }
