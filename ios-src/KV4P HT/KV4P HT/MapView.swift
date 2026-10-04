@@ -6,6 +6,7 @@ import MapKit
 struct APRSMapView: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
+    // Fixed fallback only until a station position is heard; see frameStations().
     @State private var position: MapCameraPosition = .userLocation(
         fallback: .region(MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 35.994, longitude: -78.898),
@@ -48,6 +49,14 @@ struct APRSMapView: View {
         }
         selectedEntry = entry
         store.pendingMapFocusID = nil
+    }
+
+    // With no location fix, fit the plotted stations: .automatic re-fits as
+    // more arrive until the user pans. Only the untouched initial camera has a
+    // region fallback, so user- or notification-set framing is left alone.
+    private func frameStations() {
+        guard !stations.isEmpty, position.fallbackPosition?.region != nil else { return }
+        position = .userLocation(fallback: .automatic)
     }
 
     var body: some View {
@@ -106,7 +115,11 @@ struct APRSMapView: View {
         }
         .environment(\.theme, store.theme)
         .onChange(of: store.pendingMapFocusID) { _, id in focusPendingEntry(id) }
-        .onAppear { focusPendingEntry(store.pendingMapFocusID) }
+        .onChange(of: stations.isEmpty) { _, _ in frameStations() }
+        .onAppear {
+            frameStations()
+            focusPendingEntry(store.pendingMapFocusID)
+        }
         .sheet(item: $selectedEntry) { entry in
             NavigationStack {
                 APRSDetailView(store: store, entry: entry) { _ in }
