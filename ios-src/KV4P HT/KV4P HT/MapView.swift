@@ -5,6 +5,7 @@ import MapKit
 
 struct APRSMapView: View {
     @Environment(\.theme) var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var store: RadioStore
     // Fixed fallback only until a station position is heard; see frameStations().
     @State private var position: MapCameraPosition = .userLocation(
@@ -42,7 +43,7 @@ struct APRSMapView: View {
     private func focusPendingEntry(_ id: UUID?) {
         guard let id, let entry = store.aprs.entries.first(where: { $0.id == id }),
               let lat = entry.lat, let lon = entry.lon else { return }
-        withAnimation {
+        withAnimation(reduceMotion ? nil : .default) {
             position = .region(MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
                 span: MKCoordinateSpan(latitudeDelta: 0.08, longitudeDelta: 0.08)))
@@ -159,6 +160,7 @@ struct MapStation: Identifiable {
 
 struct StationPin: View {
     @Environment(\.theme) var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var station: MapStation
     var isSelected: Bool
 
@@ -204,7 +206,7 @@ struct StationPin: View {
                 .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
         }
         .scaleEffect(isSelected ? 1.15 : 1.0)
-        .animation(.spring(response: 0.2), value: isSelected)
+        .animation(reduceMotion ? nil : .spring(response: 0.2), value: isSelected)
     }
 }
 

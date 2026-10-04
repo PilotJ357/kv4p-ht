@@ -489,6 +489,7 @@ private struct OffsetToneSheet: View {
 
 struct PTTButton: View {
     @Environment(\.theme) var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var isDown: Bool
     // TX frequency is outside the amateur band; the button is inert.
     var rxOnly: Bool = false
@@ -546,8 +547,8 @@ struct PTTButton: View {
                     }
                 )
         }
-        .scaleEffect(onAir ? 0.97 : 1.0)
-        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: onAir)
+        .scaleEffect(onAir && !reduceMotion ? 0.97 : 1.0)
+        .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.7), value: onAir)
         .accessibilityLabel(a11yLabel)
     }
 }
@@ -696,6 +697,7 @@ struct FreqReadout: View {
 
 private struct FreqNumpad: View {
     @Environment(\.theme) var t
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
     var currentFreq: String
@@ -743,7 +745,7 @@ private struct FreqNumpad: View {
                     Text(displayText)
                         .font(.system(size: 48, weight: .bold, design: .monospaced))
                         .foregroundStyle(rangeError == nil ? t.label : t.red)
-                        .contentTransition(.numericText())
+                        .contentTransition(reduceMotion ? .identity : .numericText())
                     Text(rangeError ?? "MHz")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(rangeError == nil ? t.label2 : t.red)
