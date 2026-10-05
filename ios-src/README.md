@@ -1,7 +1,7 @@
 # iOS App Source
 
 SwiftUI client for the KV4P-HT over BLE. Open `KV4P HT/KV4P HT.xcodeproj` in
-Xcode (deployment target iOS 26.5).
+Xcode (deployment target iOS 26.0).
 
 Architecture, protocol details, the background-audio and mic-indicator designs,
 and the on-device verification checklist live in
