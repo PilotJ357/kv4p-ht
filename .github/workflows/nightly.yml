@@ -1,9 +1,7 @@
 name: Nightly build
 
+# Scheduled APK builds disabled; run manually from the Actions tab if needed.
 on:
-  schedule:
-    # Run away from the top of the hour, when scheduled Actions are busiest.
-    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       force:
