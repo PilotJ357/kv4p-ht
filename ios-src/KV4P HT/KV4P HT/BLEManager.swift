@@ -210,8 +210,12 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     // Sends raw AX.25 bytes (no FCS) for the firmware's AFSK modem to
     // transmit. Firmware keys/unkeys PTT itself, and drops the frame unless
     // TX_ALLOWED (band-plan derived, see RadioModuleController) is set.
-    func sendAx25Frame(_ ax25: Data) {
-        let frame = buildKissDataFrame(ax25)
+    // With `simplexFrequency`, the frame carries its own channel (simplex,
+    // no tone, desired bandwidth) and firmware transmits it only there.
+    func sendAx25Frame(_ ax25: Data, simplexFrequency: Float? = nil) {
+        let frame = simplexFrequency.map {
+            buildAx25TxOverrideFrame(ax25, freqTx: $0, bw: radio.desiredBandwidth, ctcssTx: 0)
+        } ?? buildKissDataFrame(ax25)
         bleQueue.async { [weak self] in
             guard let self else { return }
             if let demo = self.demo { demo.receiveAx25(ax25) } else { self.gate.submit(frame) }

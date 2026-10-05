@@ -161,6 +161,21 @@ nonisolated func buildKissDataFrame(_ ax25: Data) -> Data {
     Data([KISS_FEND, 0x00]) + kissEscape(ax25) + Data([KISS_FEND])
 }
 
+// COMMAND_HOST_TX_AX25: AX.25 bytes plus the channel to send them on
+// [float freqTx, uint8 bw, uint8 ctcssTx]. Firmware tunes to that channel
+// for carrier sense and TX, then restores the normal radio config itself,
+// so a frame held by CSMA can never go out on a later-tuned frequency.
+nonisolated func buildAx25TxOverrideFrame(
+    _ ax25: Data, freqTx: Float, bw: UInt8, ctcssTx: UInt8
+) -> Data {
+    var payload = Data()
+    withUnsafeBytes(of: freqTx.bitPattern.littleEndian) { payload.append(contentsOf: $0) }
+    payload.append(bw)
+    payload.append(ctcssTx)
+    payload.append(ax25)
+    return buildKv4pVendorFrame(command: 0x0F, payload: payload)
+}
+
 nonisolated func parseWindowUpdate(_ data: Data) -> UInt32? {
     guard data.count >= 4 else { return nil }
     return data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self).littleEndian }

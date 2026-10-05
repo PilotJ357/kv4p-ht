@@ -2,6 +2,30 @@ import Foundation
 import Testing
 @testable import KV4P_HT
 
+// MARK: - AX.25 TX wire framing
+
+struct Ax25TxFramingTests {
+
+    // COMMAND_HOST_TX_AX25: [float freqTx LE, bw, ctcssTx] + AX.25 bytes,
+    // matching firmware's packed Ax25TxOverride.
+    @Test func txOverrideFrameCarriesFrequency() throws {
+        let ax25 = Data([0x01, 0xC0, 0x02])
+        let wire = buildAx25TxOverrideFrame(ax25, freqTx: 144.39, bw: DRA818_12K5, ctcssTx: 0)
+        #expect(wire.first == KISS_FEND && wire.last == KISS_FEND)
+        #expect(wire[1] == 0x06)
+        let body = kissUnescape(wire.dropFirst(2).dropLast())
+        #expect(Array(body.prefix(6)) == [0x4B, 0x56, 0x34, 0x50, KV4P_PROTOCOL_VERSION, 0x0F])
+        let params = body.dropFirst(6)
+        let freq = params.withUnsafeBytes {
+            Float(bitPattern: UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)))
+        }
+        #expect(freq == Float(144.39))
+        #expect(params[params.startIndex + 4] == DRA818_12K5)
+        #expect(params[params.startIndex + 5] == 0)
+        #expect(Data(params.dropFirst(6)) == ax25)
+    }
+}
+
 // MARK: - AX.25 frame round-trip
 
 struct AX25Tests {

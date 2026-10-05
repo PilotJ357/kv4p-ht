@@ -245,6 +245,7 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     var isHighPowerEnabled: Bool { hasDesiredFlag(HOST_STATE_HIGH_POWER) }
     var isTxAllowed: Bool { hasDesiredFlag(HOST_STATE_TX_ALLOWED) }
     var desiredSquelch: UInt8 { withLock { _desiredState.squelch } }
+    var desiredBandwidth: UInt8 { withLock { _desiredState.bw } }
 
     /// Band check for a TX frequency other than the desired one (e.g. an
     /// APRS beacon frequency) at the desired bandwidth. False before HELLO.

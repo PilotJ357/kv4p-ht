@@ -289,6 +289,19 @@ void test_ax25_scheduler_retains_frequency_override_with_job() {
   TEST_ASSERT_FLOAT_WITHIN(0.001f, 146.520f, scheduler.head()->txOverride.freqTx);
 }
 
+void test_ax25_scheduler_clear_drops_all_jobs() {
+  Ax25TxScheduler scheduler;
+  const uint8_t first[] = {0x11};
+  const uint8_t second[] = {0x22};
+  TEST_ASSERT_TRUE(scheduler.enqueue(first, sizeof(first)));
+  TEST_ASSERT_TRUE(scheduler.enqueue(second, sizeof(second)));
+  scheduler.clear();
+  TEST_ASSERT_EQUAL_UINT8(0, scheduler.count());
+  TEST_ASSERT_NULL(scheduler.head());
+  TEST_ASSERT_TRUE(scheduler.enqueue(second, sizeof(second)));
+  TEST_ASSERT_EQUAL_UINT8(0x22, scheduler.head()->data[0]);
+}
+
 void test_multiple_complete_frames_in_one_buffer() {
   resetCaptured();
   const uint8_t frames[] = {
@@ -584,6 +597,7 @@ static int runKissProtocolTests() {
   RUN_TEST(test_ax25_scheduler_does_not_restart_head_backoff_when_second_frame_arrives);
   RUN_TEST(test_ax25_scheduler_uses_kiss_txdelay_units);
   RUN_TEST(test_ax25_scheduler_retains_frequency_override_with_job);
+  RUN_TEST(test_ax25_scheduler_clear_drops_all_jobs);
   RUN_TEST(test_multiple_complete_frames_in_one_buffer);
   RUN_TEST(test_split_frame_across_loop_calls);
   RUN_TEST(test_non_zero_kiss_port_is_ignored);
