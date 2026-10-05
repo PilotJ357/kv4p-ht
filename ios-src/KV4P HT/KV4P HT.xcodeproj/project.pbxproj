@@ -409,6 +409,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = APRSMonitorWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Pocket HT";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -440,6 +441,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = APRSMonitorWidget/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Pocket HT";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -595,6 +597,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "KV4P HT/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Pocket HT";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Pocket HT uses Bluetooth to communicate with your KV4P BLE radio.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Pocket HT uses your location only for features you turn on: APRS position beacons, which publicly broadcast your position over the radio, and filtering APRS notifications by distance.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Pocket HT uses the microphone to transmit voice audio over the radio.";
@@ -632,6 +635,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "KV4P HT/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Pocket HT";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Pocket HT uses Bluetooth to communicate with your KV4P BLE radio.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Pocket HT uses your location only for features you turn on: APRS position beacons, which publicly broadcast your position over the radio, and filtering APRS notifications by distance.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Pocket HT uses the microphone to transmit voice audio over the radio.";
