@@ -68,7 +68,7 @@ struct TranscriptLogView: View {
         .navigationTitle("Transcript log")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Search text or frequency")
+                    prompt: "Search text, channel, or frequency")
         .toolbar {
             if let backLabel {
                 ToolbarItem(placement: .topBarLeading) {
@@ -159,7 +159,7 @@ private struct TranscriptEntryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(TranscriptLog.freqString(entry.freq))
+                Text(entry.channelLabel)
                     .font(.system(size: 12.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(t.accent)
                     .padding(.horizontal, 7)

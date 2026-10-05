@@ -72,6 +72,7 @@ struct CaptionLine: Identifiable {
     var segmentID: Int? = nil
     var date = Date()
     var freq: Float = 0
+    var channel: String? = nil
 }
 
 // Standard regional APRS frequencies offered in Settings. `setting` is the
@@ -579,7 +580,8 @@ class RadioStore {
 
     private func logTranscript(_ line: CaptionLine) {
         guard saveTranscripts else { return }
-        transcriptLog.upsert(TranscriptEntry(id: line.id, date: line.date, freq: line.freq, text: line.text))
+        transcriptLog.upsert(TranscriptEntry(id: line.id, date: line.date, freq: line.freq,
+                                        channel: line.channel, text: line.text))
         transcriptLog.save()
     }
 
@@ -667,7 +669,8 @@ class RadioStore {
             text: "",
             active: true,
             segmentID: segmentID,
-            freq: currentFreq
+            freq: currentFreq,
+            channel: memory(for: currentFreq)?.name
         ))
     }
 

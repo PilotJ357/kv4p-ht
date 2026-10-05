@@ -54,6 +54,36 @@ struct TranscriptLogTests {
         #expect(log.search("nothing").isEmpty)
     }
 
+    @Test func channelLabelPrefersMemoryName() {
+        var e = entry("hi", at: 0, freq: 162.55)
+        #expect(e.channelLabel == "162.550")
+        e.channel = "NOAA WX 1"
+        #expect(e.channelLabel == "NOAA WX 1")
+        e.channel = ""
+        #expect(e.channelLabel == "162.550")
+    }
+
+    @Test func searchMatchesChannelName() {
+        var log = TranscriptLog()
+        var e = entry("forecast", at: 1, freq: 162.55)
+        e.channel = "NOAA WX 1"
+        log.upsert(e)
+        #expect(log.search("noaa").count == 1)
+    }
+
+    @Test func exportIncludesChannelName() {
+        var e = entry("hello", at: 0, freq: 162.55)
+        e.channel = "NOAA WX 1"
+        let text = TranscriptLog.exportText([e], timeZone: TimeZone(identifier: "UTC")!)
+        #expect(text == "1970-01-01 00:00:00  162.550 MHz (NOAA WX 1)  hello\n")
+    }
+
+    @Test func legacyEntryWithoutChannelDecodes() throws {
+        let json = #"[{"id":"00000000-0000-0000-0000-000000000001","date":0,"freq":146.52,"text":"hi"}]"#
+        let decoded = try JSONDecoder().decode([TranscriptEntry].self, from: Data(json.utf8))
+        #expect(decoded.first?.channel == nil)
+    }
+
     @Test func removeIDs() {
         var log = TranscriptLog()
         let a = entry("a", at: 1), b = entry("b", at: 2)

@@ -8,7 +8,16 @@ nonisolated struct TranscriptEntry: Codable, Identifiable, Equatable {
     let id: UUID
     let date: Date
     let freq: Float
+    // Memory channel name when the frequency matched a memory; absent in
+    // entries saved before names were recorded.
+    var channel: String? = nil
     var text: String
+
+    // Memory name, or the frequency when not on a memory.
+    var channelLabel: String {
+        if let channel, !channel.isEmpty { return channel }
+        return TranscriptLog.freqString(freq)
+    }
 }
 
 nonisolated struct TranscriptLog: Equatable {
@@ -54,6 +63,7 @@ nonisolated struct TranscriptLog: Equatable {
         guard !q.isEmpty else { return entries }
         return entries.filter {
             $0.text.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+                || $0.channel?.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil
                 || Self.freqString($0.freq).hasPrefix(q)
         }
     }
@@ -65,7 +75,10 @@ nonisolated struct TranscriptLog: Equatable {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = timeZone
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return entries.map { "\(f.string(from: $0.date))  \(freqString($0.freq)) MHz  \($0.text)" }
+        return entries.map { e in
+            let channel = e.channel.map { $0.isEmpty ? "" : " (\($0))" } ?? ""
+            return "\(f.string(from: e.date))  \(freqString(e.freq)) MHz\(channel)  \(e.text)"
+        }
             .joined(separator: "\n") + (entries.isEmpty ? "" : "\n")
     }
 
