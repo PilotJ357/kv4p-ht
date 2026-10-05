@@ -11,7 +11,7 @@ struct PrivacyPolicyView: View {
     // system back button is used instead.
     var backLabel: String? = "More"
 
-    private static let effectiveDate = "Effective October 4, 2026"
+    private static let effectiveDate = "Effective October 5, 2026"
 
     // (heading, markdown body). Bodies use SwiftUI's inline Markdown.
     private static let sections: [(String, String)] = [
@@ -43,7 +43,7 @@ struct PrivacyPolicyView: View {
         APRS transmissions can be received by anyone nearby. Internet gateways (iGates) run by other radio operators relay them to the APRS-IS network, and public websites such as aprs.fi display and archive them. Once something has been transmitted, neither you nor the developer can remove it. You can turn beaconing off and withdraw consent at any time under More › My position & beacon.
         """),
         ("Live captions", """
-        Live captions turn received radio audio into text using Apple's speech recognition, which runs **entirely on your device**. If your device or language doesn't support on-device recognition, captions stay off. Audio is never sent to Apple's servers or anywhere else. Captions are not saved.
+        Live captions turn received radio audio into text using Apple's speech recognition, which runs **entirely on your device**. If your device or language doesn't support on-device recognition, captions stay off. Audio is never sent to Apple's servers or anywhere else. Captions are only saved if you turn on **Save transcripts** in Settings; saved transcripts (text, frequency, and time) are stored on your device only, can be deleted from the Transcript log at any time, and are removed when you delete the app. Audio is never saved.
         """),
         ("Other device features", """
         • **Bluetooth** is used only to connect to your kv4p HT radio.

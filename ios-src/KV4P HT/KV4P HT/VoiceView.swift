@@ -1060,6 +1060,15 @@ struct CaptionsSheet: View {
                 .background(t.bg.ignoresSafeArea())
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    TranscriptLogView(store: store)
+                } label: {
+                    Label("Transcript log", systemImage: "list.bullet.rectangle")
+                }
+            }
+        }
         .environment(\.theme, store.theme)
         // Opening captions is the point of intent for the speech prompt.
         .onAppear { store.requestCaptionsPermissionIfNeeded() }
