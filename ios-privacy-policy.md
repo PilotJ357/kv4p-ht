@@ -1,8 +1,8 @@
-# KV4P HT for iOS — Privacy Policy
+# Pocket HT for iOS — Privacy Policy
 
 Effective October 5, 2026
 
-KV4P HT is an open-source app for controlling a kv4p HT amateur radio over Bluetooth.
+Pocket HT is an open-source app for controlling a kv4p HT amateur radio over Bluetooth.
 The full source code is public, so everything below can be checked against the code.
 
 ## The short version
@@ -15,21 +15,17 @@ The full source code is public, so everything below can be checked against the c
 
 ## What stays on your device
 
-The app stores the following on your device only:
-
-- Settings, including your callsign, APRS options, and notification preferences
-- Saved memory channels
-- History of APRS packets sent and received
-
-This data is removed when you delete the app. Like other app data, it can be included in your
-device's iCloud or computer backups.
+Your callsign and other settings, saved memory channels, notification preferences, and the
+history of APRS packets sent and received are stored on your device only. This data is removed
+when you delete the app. Like other app data, it can be included in your device's iCloud or
+computer backups.
 
 ## Location
 
 The app asks for location access only when you turn on a feature that needs it:
 
 - **APRS position beacons.** Off by default. Before the first beacon, the app explains what
-  will be broadcast and asks you to agree. See "What you transmit is public" below.
+  will be broadcast and asks you to agree.
 - **Notification distance filter.** Your location is compared on the device to positions in
   received APRS packets, so you are only notified about nearby stations.
 - **Center map on me.** Tapping the location button on the Map tab centers the map on your
@@ -47,8 +43,9 @@ Amateur radio transmissions are not private and, by law, cannot be encrypted.
 - **APRS messages.** Messages and acknowledgments you send are broadcast along with your
   callsign.
 - **APRS position beacons.** When enabled, your callsign and GPS position are broadcast at the
-  interval you choose while the radio is connected, including when the app is in the
-  background. "Approximate position" rounds your location to about 1 km first.
+  interval you choose while the radio is connected and the app is open; they pause in the
+  background, and are never sent with an out-of-date location. "Approximate position" rounds
+  your location to about 1 km first.
 
 APRS transmissions can be received by anyone nearby. Internet gateways (iGates) run by other
 radio operators relay them to the APRS-IS network, and public websites such as aprs.fi display
@@ -61,7 +58,7 @@ More › My position & beacon.
 Live captions turn received radio audio into text using Apple's speech recognition, which
 runs **entirely on your device**. If your device or language doesn't support on-device
 recognition, captions stay off. Audio is never sent to Apple's servers or anywhere else.
-Captions are only saved if you turn on **Save transcripts** in Settings. Saved transcripts
+Captions are only saved if you turn on **Save transcripts** in Settings; saved transcripts
 (text, frequency, and time) are stored on your device only, can be deleted from the
 Transcript log at any time, and are removed when you delete the app. Audio is never saved.
 
@@ -77,10 +74,7 @@ Transcript log at any time, and are removed when you delete the app. Audio is ne
 
 The app is not directed at children. Transmitting requires an amateur radio license.
 
-## Changes
+## Changes & contact
 
-Changes to this policy will be posted here with a new effective date.
-
-## Contact
-
-Questions or concerns: open an issue at <https://github.com/PilotJ357/kv4p-ht/issues>.
+Changes to this policy will be posted with a new effective date. Questions or concerns:
+[open an issue on GitHub](https://github.com/PilotJ357/kv4p-ht/issues).
