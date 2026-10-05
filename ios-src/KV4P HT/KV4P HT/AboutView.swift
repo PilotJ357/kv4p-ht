@@ -53,7 +53,7 @@ struct AboutView: View {
                 }
 
                 ListGroupView(header: "Open source",
-                              footer: "KV4P HT is free software under the GNU General Public License v3. This iOS app is built on the kv4p HT project by Vance Vagell (KV4P) and uses no third-party libraries — only Apple system frameworks.") {
+                              footer: "BLE HT is free software under the GNU General Public License v3. This iOS app is built on the kv4p HT project by Vance Vagell (KV4P) and uses no third-party libraries — only Apple system frameworks.") {
                     Button { openURL(Self.sourceURL) } label: {
                         ListRow(title: "Source code", subtitle: "github.com/PilotJ357/kv4p-ht",
                                 isLast: false, accessory: ExternalLinkIcon() as (any View))
