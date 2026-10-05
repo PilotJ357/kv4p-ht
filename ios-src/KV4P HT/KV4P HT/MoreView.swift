@@ -137,17 +137,8 @@ struct SettingsView: View {
     @State private var captionsAlert: CaptionsStatus? = nil
     @Environment(\.openURL) private var openURL
 
-    private let aprsFrequencies = ["Current", "144.3900", "144.5750", "144.6400", "144.6600", "144.8000", "145.1750", "145.8250"]
-    private let aprsFrequencyLabels = [
-        "Current",
-        "144.3900 (Americas)",
-        "144.5750 (New Zealand)",
-        "144.6400 (Japan)",
-        "144.6600 (Australia)",
-        "144.8000 (Europe/Africa)",
-        "145.1750 (Australia, alt)",
-        "145.8250 (ISS/satellite)",
-    ]
+    private let aprsFrequencies = ["Current"] + APRSRegion.all.map(\.setting)
+    private let aprsFrequencyLabels = ["Current"] + APRSRegion.all.map(\.label)
 
     private var captionsFooter: String {
         let onDevice = "On-device speech recognition. No data sent to the cloud."
