@@ -32,6 +32,8 @@ The app asks for location access only when you turn on a feature that needs it:
   will be broadcast and asks you to agree. See "What you transmit is public" below.
 - **Notification distance filter.** Your location is compared on the device to positions in
   received APRS packets, so you are only notified about nearby stations.
+- **Center map on me.** Tapping the location button on the Map tab centers the map on your
+  position.
 
 If location access is allowed, the map also shows where you are. Your location is never
 sent to the developer or any server by the app.

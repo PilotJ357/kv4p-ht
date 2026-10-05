@@ -29,6 +29,7 @@ struct PrivacyPolicyView: View {
 
         • **APRS position beacons.** Off by default. Before the first beacon, the app explains what will be broadcast and asks you to agree.
         • **Notification distance filter.** Your location is compared on the device to positions in received APRS packets, so you are only notified about nearby stations.
+        • **Center map on me.** Tapping the location button on the Map tab centers the map on your position.
 
         If location access is allowed, the map also shows where you are. Your location is never sent to the developer or any server by the app.
         """),
