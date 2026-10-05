@@ -285,8 +285,9 @@ struct SettingsView: View {
                             .padding(.vertical, 12)
                             Divider().padding(.leading, 16).background(t.sep)
                         }
-                        ListRow(title: "Sticky PTT",     isLast: true, dense: true,
+                        ListRow(title: "Sticky PTT",     dense: true,
                                 accessory: KVToggle(isOn: $store.stickyPTT) as (any View))
+                        TxTimeoutRow(store: store)
                     }
                 }
                 .padding(.bottom, 32)
@@ -333,6 +334,31 @@ private struct TXPowerRow: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 140)
             .disabled(!store.radio.hasHighLowPowerSwitch)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 46)
+    }
+}
+
+// MARK: - TX time-out picker
+
+private struct TxTimeoutRow: View {
+    @Environment(\.theme) var t
+    @Bindable var store: RadioStore
+
+    var body: some View {
+        HStack {
+            Text("TX time-out")
+                .font(.system(size: 16.5, weight: .medium))
+                .foregroundStyle(t.label)
+            Spacer()
+            Picker("TX time-out", selection: $store.txTimeoutSeconds) {
+                ForEach(TxTimeout.options, id: \.self) { secs in
+                    Text(TxTimeout.label(secs)).tag(secs)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(t.label2)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 46)

@@ -246,6 +246,19 @@ class RadioStore {
         }
     }
     var stickyPTT: Bool = false
+    // Voice TX time-out in seconds (0 = off); see TxTimeout.
+    var txTimeoutSeconds: Int = TxTimeout.defaultSeconds {
+        didSet { if !isInitializing { UserDefaults.standard.set(txTimeoutSeconds, forKey: Self.txTimeoutKey) } }
+    }
+    // Last PTT request pushed through sendRadioState.
+    private(set) var voicePTTKeyed = false
+    private var txTimeoutTask: Task<Void, Never>?
+    // Seconds left before the TOT cuts TX; nil outside the warning window.
+    private(set) var txTimeoutRemaining: Int?
+    // Bumped whenever the app drops voice PTT on its own (TOT, background)
+    // so the PTT button unlatches; pttReleaseNotice says why.
+    private(set) var pttForcedReleaseCount = 0
+    var pttReleaseNotice: String?
     // Re-read on foreground: the user can only change it in Settings.
     var micPermission = MicPermission(AVAudioApplication.shared.recordPermission)
     var bandwidth: UInt8 = 0 {  // 0=wide 25kHz, 1=narrow 12.5kHz
@@ -282,6 +295,9 @@ class RadioStore {
             squelch = UInt8(clamping: s)
         }
         txLicenseAcknowledged = UserDefaults.standard.bool(forKey: Self.txLicenseAckKey)
+        if let s = UserDefaults.standard.object(forKey: Self.txTimeoutKey) as? Int {
+            txTimeoutSeconds = s
+        }
         isInitializing = false
         configureSpeechManager()
         // Location is only used by features the user opted into.
@@ -370,6 +386,7 @@ class RadioStore {
     private static let notifySettingsKey = "aprsNotifySettings"
     private static let squelchKey = "squelchLevel"
     private static let txLicenseAckKey = "txLicenseAcknowledged"
+    private static let txTimeoutKey = "txTimeoutSeconds"
 
     private struct APRSSettings: Codable {
         var callsign: String
@@ -768,6 +785,9 @@ class RadioStore {
     // Backgrounding keeps audio + BLE running; only UI-side work pauses
     // (speech recognition burns CPU and is unreliable in background).
     func enterBackground() {
+        // Background audio keeps the mic live, so a latched sticky PTT would
+        // stay keyed with nobody watching. Never transmit unattended.
+        releaseVoicePTT(notice: "Transmit stopped because the app left the foreground.")
         ble.setAudioSampleHook(nil)
         captionsSuspended = true
         stopCaptions()
@@ -885,6 +905,42 @@ class RadioStore {
         radio.endUpdate()
         meterGate.setPTT(ptt, at: Date())
         refreshMeterGate()
+        updateVoiceTx(keyed: ptt)
+    }
+
+    // Unkeys voice PTT if it's on and tells the UI to unlatch + explain.
+    func releaseVoicePTT(notice: String) {
+        guard voicePTTKeyed else { return }
+        sendRadioState(ptt: false)
+        pttForcedReleaseCount += 1
+        pttReleaseNotice = notice
+    }
+
+    // Arms the TOT on key-up edge, disarms on unkey.
+    private func updateVoiceTx(keyed: Bool) {
+        guard keyed != voicePTTKeyed else { return }
+        voicePTTKeyed = keyed
+        txTimeoutTask?.cancel()
+        txTimeoutTask = nil
+        txTimeoutRemaining = nil
+        let limit = txTimeoutSeconds
+        guard keyed, limit > 0 else { return }
+        let start = Date()
+        txTimeoutTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                switch TxTimeout.phase(elapsed: Date().timeIntervalSince(start), limit: limit) {
+                case .ok:
+                    break
+                case .warning(let remaining):
+                    self.txTimeoutRemaining = remaining
+                case .expired:
+                    self.releaseVoicePTT(notice: "Transmit stopped after \(TxTimeout.label(limit)) (TX time-out). Change it in Settings.")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
     }
 
     // Batched so the bandwidth didSet and the channel push go out as one
