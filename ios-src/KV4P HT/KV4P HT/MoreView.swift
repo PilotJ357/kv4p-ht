@@ -216,7 +216,8 @@ struct SettingsView: View {
                         Divider().padding(.leading, 16).background(t.sep)
                         ListRow(title: "Band",
                                 value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–",
-                                showChevron: false, isLast: true)
+                                showChevron: false, isLast: false)
+                        TxTimeoutRow(store: store)
                     }
 
                     // Audio filters
@@ -333,6 +334,33 @@ private struct TXPowerRow: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 140)
             .disabled(!store.radio.hasHighLowPowerSwitch)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 46)
+    }
+}
+
+// MARK: - TX time-out picker
+
+private struct TxTimeoutRow: View {
+    @Environment(\.theme) var t
+    @Bindable var store: RadioStore
+
+    var body: some View {
+        HStack {
+            Text("TX time-out")
+                .font(.system(size: 16.5, weight: .medium))
+                .foregroundStyle(t.label)
+            Spacer()
+            Menu {
+                Picker("TX time-out", selection: $store.txTimeoutSeconds) {
+                    ForEach(TxTimeout.options, id: \.self) { secs in
+                        Text(TxTimeout.label(secs)).tag(secs)
+                    }
+                }
+            } label: {
+                MenuValueLabel(text: TxTimeout.label(store.txTimeoutSeconds))
+            }
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 46)
@@ -686,13 +714,16 @@ private struct PickerRow: View {
                     .font(.system(size: 16.5, weight: .medium))
                     .foregroundStyle(t.label)
                 Spacer()
-                Picker(title, selection: $selection) {
-                    ForEach(Array(options.enumerated()), id: \.element) { i, opt in
-                        Text(labels?[i] ?? opt).tag(opt)
+                Menu {
+                    Picker(title, selection: $selection) {
+                        ForEach(Array(options.enumerated()), id: \.element) { i, opt in
+                            Text(labels?[i] ?? opt).tag(opt)
+                        }
                     }
+                } label: {
+                    MenuValueLabel(text: options.firstIndex(of: selection)
+                        .map { labels?[$0] ?? options[$0] } ?? selection)
                 }
-                .pickerStyle(.menu)
-                .tint(t.label2)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 46)
@@ -700,6 +731,25 @@ private struct PickerRow: View {
                 Divider().padding(.leading, 16).background(t.sep)
             }
         }
+    }
+}
+
+// Value + up/down chevron for a Menu-backed picker row. Used instead of a
+// .menu Picker, which pads its trailing edge and leaves the value inset
+// from the other rows' values.
+private struct MenuValueLabel: View {
+    @Environment(\.theme) var t
+    var text: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(text)
+                .font(.system(size: 16))
+                .multilineTextAlignment(.trailing)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(t.label2)
     }
 }
 

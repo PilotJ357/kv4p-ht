@@ -160,6 +160,17 @@ private struct RadioStage: View {
         store.voicePTTGate == .micDenied
     }
 
+    // Mode chip doubles as the TX time-out countdown in its last seconds.
+    private var chipLabel: String {
+        if let remaining = store.txTimeoutRemaining { return "TX ends in \(remaining)s" }
+        return modeLabel
+    }
+
+    private var showReleaseNotice: Binding<Bool> {
+        Binding(get: { store.pttReleaseNotice != nil },
+                set: { if !$0 { store.pttReleaseNotice = nil } })
+    }
+
     private func sendPTT(_ on: Bool) {
         store.sendRadioState(freq: Float(freq) ?? 146.52, ptt: on)
     }
@@ -187,7 +198,7 @@ private struct RadioStage: View {
                 Circle()
                     .fill(txApplied ? t.red : t.accent)
                     .frame(width: 6, height: 6)
-                Text(modeLabel)
+                Text(chipLabel)
                     .font(.system(size: 12.5, weight: .bold))
                     .tracking(1)
                     .foregroundStyle(t.label)
@@ -325,6 +336,17 @@ private struct RadioStage: View {
         // sticky PTT so it doesn't show ON AIR or carry over once back in band.
         .onChange(of: txBlocked) { _, blocked in
             if blocked { stickyPttActive = false }
+        }
+        // The store dropped PTT itself (TX time-out or backgrounding).
+        .onChange(of: store.pttForcedReleaseCount) { _, _ in
+            stickyPttActive = false
+            holdKeyed = false
+        }
+        .sensoryFeedback(.warning, trigger: store.txTimeoutRemaining != nil) { _, warning in warning }
+        .alert("Transmit stopped", isPresented: showReleaseNotice) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(store.pttReleaseNotice ?? "")
         }
         .alert("Amateur radio license required", isPresented: $showLicenseAck) {
             Button("I'm Licensed") { store.txLicenseAcknowledged = true }
