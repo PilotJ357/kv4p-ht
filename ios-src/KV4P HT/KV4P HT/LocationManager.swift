@@ -32,7 +32,7 @@ nonisolated enum LocationAccess: Equatable {
     var explanation: String? {
         switch self {
         case .denied:
-            return "Location access is off for BLE HT. Allow it in Settings › BLE HT › Location."
+            return "Location access is off for Pocket HT. Allow it in Settings › Pocket HT › Location."
         case .restricted:
             return "Location access is restricted on this device (Screen Time or device management)."
         case .servicesOff:
@@ -47,7 +47,7 @@ nonisolated enum LocationAccess: Equatable {
         switch self {
         case .authorized:    return "Getting your location — try again in a moment"
         case .notDetermined: return "Allow location access to send a beacon"
-        case .denied:        return "Not sent — location access is off for BLE HT"
+        case .denied:        return "Not sent — location access is off for Pocket HT"
         case .restricted:    return "Not sent — location access is restricted on this device"
         case .servicesOff:   return "Not sent — Location Services are turned off"
         }
