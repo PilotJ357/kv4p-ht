@@ -37,7 +37,7 @@ struct PrivacyPolicyView: View {
 
         • **Voice.** When you press push-to-talk, microphone audio is transmitted over the radio. Anyone tuned to that frequency can hear it. The app does not record or store it.
         • **APRS messages.** Messages and acknowledgments you send are broadcast along with your callsign.
-        • **APRS position beacons.** When enabled, your callsign and GPS position are broadcast at the interval you choose while the radio is connected, including when the app is in the background. "Approximate position" rounds your location to about 1 km first.
+        • **APRS position beacons.** When enabled, your callsign and GPS position are broadcast at the interval you choose while the radio is connected and the app is open; they pause in the background, and are never sent with an out-of-date location. "Approximate position" rounds your location to about 1 km first.
 
         APRS transmissions can be received by anyone nearby. Internet gateways (iGates) run by other radio operators relay them to the APRS-IS network, and public websites such as aprs.fi display and archive them. Once something has been transmitted, neither you nor the developer can remove it. You can turn beaconing off and withdraw consent at any time under More › My position & beacon.
         """),

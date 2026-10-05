@@ -70,6 +70,32 @@ class LocationManager: NSObject, CLLocationManagerDelegate {
         access = LocationAccess(status: manager.authorizationStatus, servicesEnabled: true)
     }
 
+    /// `location` if it was fixed within `maxAge`; nil when missing or stale.
+    func location(maxAge: TimeInterval, now: Date = Date()) -> CLLocation? {
+        guard let location, Self.isFresh(location, maxAge: maxAge, now: now) else { return nil }
+        return location
+    }
+
+    /// A fix no older than `maxAge`, requesting a new one and waiting up to
+    /// `timeout` when the cached fix is missing or stale. Returns nil if none
+    /// arrives (or access isn't granted), so callers never act on an old fix.
+    func freshLocation(maxAge: TimeInterval, timeout: Duration = .seconds(10)) async -> CLLocation? {
+        if let loc = location(maxAge: maxAge) { return loc }
+        requestLocation()
+        guard access == .authorized else { return nil }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(250))
+            if let loc = location(maxAge: maxAge) { return loc }
+            if !isLoading { break }   // request finished (or failed) without a fresh fix
+        }
+        return location(maxAge: maxAge)
+    }
+
+    nonisolated static func isFresh(_ location: CLLocation, maxAge: TimeInterval, now: Date) -> Bool {
+        now.timeIntervalSince(location.timestamp) <= maxAge
+    }
+
     func requestLocation() {
         switch manager.authorizationStatus {
         case .notDetermined:

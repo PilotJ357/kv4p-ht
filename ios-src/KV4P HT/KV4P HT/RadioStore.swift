@@ -827,6 +827,7 @@ class RadioStore {
         // Background audio keeps the mic live, so a latched sticky PTT would
         // stay keyed with nobody watching. Never transmit unattended.
         releaseVoicePTT(notice: "Transmit stopped because the app left the foreground.")
+        aprs.enterBackground()
         ble.setAudioSampleHook(nil)
         captionsSuspended = true
         stopCaptions()
@@ -838,6 +839,7 @@ class RadioStore {
     }
 
     func enterForeground() {
+        aprs.enterForeground()
         setupAudioSampleHook()
         ble.recoverAudioIfNeeded()
         captionsSuspended = false
