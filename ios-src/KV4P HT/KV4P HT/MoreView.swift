@@ -216,7 +216,8 @@ struct SettingsView: View {
                         Divider().padding(.leading, 16).background(t.sep)
                         ListRow(title: "Band",
                                 value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–",
-                                showChevron: false, isLast: true)
+                                showChevron: false, isLast: false)
+                        TxTimeoutRow(store: store)
                     }
 
                     // Audio filters
@@ -285,9 +286,8 @@ struct SettingsView: View {
                             .padding(.vertical, 12)
                             Divider().padding(.leading, 16).background(t.sep)
                         }
-                        ListRow(title: "Sticky PTT",     dense: true,
+                        ListRow(title: "Sticky PTT",     isLast: true, dense: true,
                                 accessory: KVToggle(isOn: $store.stickyPTT) as (any View))
-                        TxTimeoutRow(store: store)
                     }
                 }
                 .padding(.bottom, 32)
