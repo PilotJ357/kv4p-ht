@@ -50,3 +50,29 @@ struct LocationAccessTests {
         #expect(LocationAccess.servicesOff.beaconStatus.contains("Location Services"))
     }
 }
+
+// MARK: - Fix freshness (#49: never beacon a stale cached position)
+
+struct LocationFreshnessTests {
+    private let now = Date(timeIntervalSince1970: 1_000_000)
+
+    private func fix(age: TimeInterval) -> CLLocation {
+        CLLocation(coordinate: .init(latitude: 37, longitude: -122), altitude: 0,
+                   horizontalAccuracy: 100, verticalAccuracy: -1,
+                   timestamp: now.addingTimeInterval(-age))
+    }
+
+    @Test func recentFixIsFresh() {
+        #expect(LocationManager.isFresh(fix(age: 60), maxAge: APRSController.beaconFixMaxAge, now: now))
+    }
+
+    @Test func fixAtLimitIsFresh() {
+        let max = APRSController.beaconFixMaxAge
+        #expect(LocationManager.isFresh(fix(age: max), maxAge: max, now: now))
+    }
+
+    @Test func oldFixIsStale() {
+        let max = APRSController.beaconFixMaxAge
+        #expect(!LocationManager.isFresh(fix(age: max + 1), maxAge: max, now: now))
+    }
+}

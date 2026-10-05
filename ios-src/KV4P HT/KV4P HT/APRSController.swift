@@ -187,7 +187,10 @@ class APRSController {
         guard !entry.isOutgoing, let store, store.aprsNotify.enabled,
               let notifier else { return }
         let addressed = isAddressedToMe(entry.toCallsign)
-        let dist = entry.distanceMi(from: store.locationManager.location)
+        // A stale fix would filter against where we used to be; treat it as
+        // unknown (no distance filtering) instead.
+        let here = store.locationManager.location(maxAge: Self.notifyFixMaxAge)
+        let dist = entry.distanceMi(from: here)
         notifier.consider(entry, settings: store.aprsNotify,
                            isAddressedToMe: addressed, distanceMi: dist, now: Date())
     }
@@ -560,8 +563,31 @@ class APRSController {
     // MARK: - Position beacon
 
     enum BeaconResult {
-        case sent, notReady, noConsent, outOfBand
+        case sent, notReady, noConsent, outOfBand, staleLocation
         case noLocation(LocationAccess)
+    }
+
+    // Beacons publicly broadcast position, so never send an old cached fix
+    // (#49). The notification distance filter tolerates more drift.
+    nonisolated static let beaconFixMaxAge: TimeInterval = 5 * 60
+    nonisolated static let notifyFixMaxAge: TimeInterval = 30 * 60
+
+    // Scheduled beacons pause while backgrounded: with When-In-Use access
+    // iOS won't deliver new fixes there, so they could only repeat a stale one.
+    @ObservationIgnored private var isBackgrounded = false
+
+    func enterBackground() {
+        isBackgrounded = true
+        beaconGate.reset()
+        cancelBeaconDeferTimer()
+    }
+
+    func enterForeground() {
+        isBackgrounded = false
+        // Warm the fix so the next scheduled beacon has a current position.
+        if let store, store.aprsBeaconEnabled, store.aprsBeaconConsented {
+            store.locationManager.requestLocation()
+        }
     }
 
     func sendPositionBeacon() async -> BeaconResult {
@@ -573,10 +599,15 @@ class APRSController {
         let beaconFreq = store.aprsBeaconFrequency == "Current" ? nil : Float(store.aprsBeaconFrequency)
         guard beaconFreq.map({ store.radio.canTransmit(onFrequency: $0) }) ?? store.radio.isTxAllowed
         else { return .outOfBand }
-        guard let location = store.locationManager.location else {
-            store.locationManager.requestLocation()
-            return .noLocation(store.locationManager.access)
+        guard let location = await store.locationManager.freshLocation(maxAge: Self.beaconFixMaxAge)
+        else {
+            return store.locationManager.location == nil
+                ? .noLocation(store.locationManager.access) : .staleLocation
         }
+        // Waiting for a fix can take seconds; re-check the link and band.
+        guard isReadyToTransmit() else { return .notReady }
+        guard beaconFreq.map({ store.radio.canTransmit(onFrequency: $0) }) ?? store.radio.isTxAllowed
+        else { return .outOfBand }
         var lat = location.coordinate.latitude
         var lon = location.coordinate.longitude
         if store.aprsPositionApprox {
@@ -639,13 +670,15 @@ class APRSController {
     }
 
     private func scheduledBeacon(_ trigger: BeaconDeferGate.Trigger) async {
-        guard let store, store.aprsBeaconEnabled, !store.isScanning else {
+        guard let store, store.aprsBeaconEnabled, !store.isScanning, !isBackgrounded else {
             beaconGate.reset()
             return
         }
         switch beaconGate.evaluate(trigger, interruptReception: store.aprsBeaconInterruptRx,
                                    squelched: store.isSquelched) {
         case .send:
+            // The fix wait inside can outlast a backgrounding; don't send then.
+            guard !isBackgrounded else { return }
             _ = await sendPositionBeacon()
         case .hold:
             scheduleBeaconRetry()

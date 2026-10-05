@@ -499,7 +499,7 @@ struct BeaconSettingsView: View {
     // What to do once the user accepts the public-broadcast disclosure.
     private enum ConsentAction { case enableBeacon, beaconNow }
 
-    static let consentMessage = "Position beacons transmit your callsign and location over the air on APRS. Anyone listening can receive them, and internet gateways (iGates) relay them to public websites such as aprs.fi, where they are archived and can't be deleted.\n\nBeacons are sent at the chosen interval while the radio is connected, including when the app is in the background. Turn on Approximate position to round your location to about 1 km."
+    static let consentMessage = "Position beacons transmit your callsign and location over the air on APRS. Anyone listening can receive them, and internet gateways (iGates) relay them to public websites such as aprs.fi, where they are archived and can't be deleted.\n\nBeacons are sent at the chosen interval while the radio is connected and the app is open; they pause in the background. Turn on Approximate position to round your location to about 1 km."
 
     // Curated APRS symbols (table "/"), mirroring Android's APRSIconType subset.
     private static let symbols: [(code: String, label: String)] = [
@@ -515,7 +515,7 @@ struct BeaconSettingsView: View {
                 VStack(spacing: 4) {
                     ListGroupView(
                         header: "Position beacon",
-                        footer: "Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected, including in the background. Requires a callsign and APRS frequency configured in Settings.\n\nWith Interrupt reception off, a scheduled beacon that comes due while a signal is being received waits, re-checking every \(Int(BeaconDeferGate.retryInterval)) s until the channel is quiet. Beacon now always sends immediately."
+                        footer: "Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected and the app is open. Scheduled beacons pause while the app is in the background, and a beacon is skipped rather than sent with a location fix older than \(Int(APRSController.beaconFixMaxAge / 60)) minutes. Requires a callsign and APRS frequency configured in Settings.\n\nWith Interrupt reception off, a scheduled beacon that comes due while a signal is being received waits, re-checking every \(Int(BeaconDeferGate.retryInterval)) s until the channel is quiet. Beacon now always sends immediately."
                     ) {
                         ListRow(title: "Beacon position", isLast: false,
                                 accessory: KVToggle(isOn: beaconEnabledBinding) as (any View))
@@ -653,6 +653,7 @@ struct BeaconSettingsView: View {
             case .noLocation(let access): beaconStatus = access.beaconStatus
             case .notReady:   beaconStatus = "Not connected or no callsign set"
             case .outOfBand:  beaconStatus = "Not sent — beacon frequency is outside the amateur band"
+            case .staleLocation: beaconStatus = "Not sent — couldn't get a current location fix"
             case .noConsent:  beaconStatus = nil
             }
         }
