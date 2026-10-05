@@ -444,12 +444,12 @@ class APRSController {
     }
 
     @discardableResult
-    private func transmitPayload(_ payload: String) -> Bool {
+    private func transmitPayload(_ payload: String, simplexFrequency: Float? = nil) -> Bool {
         guard let store, let me = myCallsign else { return false }
         let frame = AX25Frame(source: me, payload: Data(payload.utf8))
         let raw = frame.encodedWithoutFCS()
         store.notePacketTx()
-        store.ble.sendAx25Frame(raw)
+        store.ble.sendAx25Frame(raw, simplexFrequency: simplexFrequency)
         let info = parseAPRSPayload(frame.payload)
         let (kind, msgNum) = Self.frameIdentity(of: info)
         persistence.insertFrame(
@@ -590,10 +590,17 @@ class APRSController {
             timestamp: Date(), lat: lat, lon: lon,
             symbolTable: "/", symbolCode: String(symbol), isOutgoing: true))
 
-        if let freq = beaconFreq {
+        // The frame carries the beacon frequency, so firmware tunes there for
+        // carrier sense and TX and restores the channel afterwards; a frame
+        // held by CSMA can't leak onto whatever is tuned later (#57).
+        if let freq = beaconFreq, store.radio.isTxAllowed {
+            transmitPayload(payload, simplexFrequency: freq)
+        } else if let freq = beaconFreq {
+            // Current channel is out of band, so firmware would refuse the
+            // frame (no TX_ALLOWED). Retune so the controller grants it.
             await store.withSimplexFrequency(freq) {
                 try? await Task.sleep(for: .milliseconds(500))
-                transmitPayload(payload)
+                transmitPayload(payload, simplexFrequency: freq)
                 try? await Task.sleep(for: .seconds(4))
             }
         } else {
