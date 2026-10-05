@@ -203,6 +203,11 @@ class RadioStore {
             }
         }
     }
+    // Off: scheduled beacons wait while squelch is open instead of retuning
+    // away from (and transmitting over) the signal being received.
+    var aprsBeaconInterruptRx: Bool = true {
+        didSet { if !isInitializing { saveAprsSettings() } }
+    }
     var aprsPositionApprox: Bool = false {
         didSet { if !isInitializing { saveAprsSettings() } }
     }
@@ -429,6 +434,7 @@ class RadioStore {
         var positionApprox: Bool
         var silenceRxOnAprsFreq: Bool = false
         var beaconConsented: Bool?
+        var beaconInterruptRx: Bool?
     }
 
     private func loadAprsSettings() {
@@ -442,6 +448,7 @@ class RadioStore {
         aprsBeaconEnabled = s.beaconEnabled && aprsBeaconConsented
         aprsBeaconIntervalMin = s.beaconIntervalMin
         aprsBeaconFrequency = s.beaconFrequency
+        aprsBeaconInterruptRx = s.beaconInterruptRx ?? true
         aprsPositionApprox = s.positionApprox
         silenceRxOnAprsFreq = s.silenceRxOnAprsFreq
     }
@@ -451,7 +458,8 @@ class RadioStore {
             callsign: callsign, ssid: aprsSSID, symbol: aprsSymbol,
             beaconEnabled: aprsBeaconEnabled, beaconIntervalMin: aprsBeaconIntervalMin,
             beaconFrequency: aprsBeaconFrequency, positionApprox: aprsPositionApprox,
-            silenceRxOnAprsFreq: silenceRxOnAprsFreq, beaconConsented: aprsBeaconConsented)
+            silenceRxOnAprsFreq: silenceRxOnAprsFreq, beaconConsented: aprsBeaconConsented,
+            beaconInterruptRx: aprsBeaconInterruptRx)
         guard let data = try? JSONEncoder().encode(s) else { return }
         UserDefaults.standard.set(data, forKey: Self.aprsSettingsKey)
     }

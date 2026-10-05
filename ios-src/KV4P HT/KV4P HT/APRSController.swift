@@ -117,6 +117,8 @@ class APRSController {
     @ObservationIgnored private var persistence: APRSPersistence
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var beaconTimer: Timer?
+    @ObservationIgnored private var beaconDeferTimer: Timer?
+    @ObservationIgnored private var beaconGate = BeaconDeferGate()
     @ObservationIgnored private var retryTimer: Timer?
     @ObservationIgnored private var messageNumber: Int
     // Real counter parked while demo messages draw from a scratch copy.
@@ -602,19 +604,61 @@ class APRSController {
         return .sent
     }
 
+    // "Beacon now": always sends immediately, and stands in for a held
+    // scheduled beacon.
+    func sendManualBeacon() async -> BeaconResult {
+        if let store {
+            _ = beaconGate.evaluate(.manual, interruptReception: store.aprsBeaconInterruptRx,
+                                    squelched: store.isSquelched)
+        }
+        cancelBeaconDeferTimer()
+        return await sendPositionBeacon()
+    }
+
     // MARK: - Beacon timer
 
     func updateBeaconTimer() {
         beaconTimer?.invalidate()
         beaconTimer = nil
+        beaconGate.reset()
+        cancelBeaconDeferTimer()
         guard let store, store.aprsBeaconEnabled, store.aprsBeaconConsented else { return }
         let interval = TimeInterval(max(1, store.aprsBeaconIntervalMin)) * 60
         beaconTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, let store = self.store,
-                      store.aprsBeaconEnabled, !store.isScanning else { return }
-                _ = await self.sendPositionBeacon()
+                await self?.scheduledBeacon(.interval)
             }
         }
+    }
+
+    private func scheduledBeacon(_ trigger: BeaconDeferGate.Trigger) async {
+        guard let store, store.aprsBeaconEnabled, !store.isScanning else {
+            beaconGate.reset()
+            return
+        }
+        switch beaconGate.evaluate(trigger, interruptReception: store.aprsBeaconInterruptRx,
+                                   squelched: store.isSquelched) {
+        case .send:
+            _ = await sendPositionBeacon()
+        case .hold:
+            scheduleBeaconRetry()
+        case .skip:
+            break
+        }
+    }
+
+    private func scheduleBeaconRetry() {
+        beaconDeferTimer?.invalidate()
+        beaconDeferTimer = Timer.scheduledTimer(
+            withTimeInterval: BeaconDeferGate.retryInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.scheduledBeacon(.retry)
+            }
+        }
+    }
+
+    private func cancelBeaconDeferTimer() {
+        beaconDeferTimer?.invalidate()
+        beaconDeferTimer = nil
     }
 }
