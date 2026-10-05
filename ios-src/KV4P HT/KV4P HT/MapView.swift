@@ -15,6 +15,13 @@ struct APRSMapView: View {
         ))
     )
     @State private var selectedEntry: APRSEntry? = nil
+    @Environment(\.openURL) private var openURL
+    // Set when the locate button triggered the permission prompt, so the
+    // map recenters once the user answers it.
+    @State private var recenterOnAuthorization = false
+    @State private var showLocationUnavailable = false
+
+    private var locationAccess: LocationAccess { store.locationManager.access }
 
     // Latest position-bearing entry per station callsign.
     private var stations: [MapStation] {
@@ -50,6 +57,29 @@ struct APRSMapView: View {
         }
         selectedEntry = entry
         store.pendingMapFocusID = nil
+    }
+
+    // Location is only requested at point of intent: the first tap asks for
+    // When-In-Use, and a denied/restricted/off state explains instead.
+    private func recenterOnUser() {
+        let access = locationAccess
+        if access.isUnavailable {
+            store.locationManager.refresh()
+            showLocationUnavailable = true
+        } else if access == .authorized {
+            withAnimation(reduceMotion ? nil : .default) {
+                position = .userLocation(fallback: .automatic)
+            }
+        } else {
+            recenterOnAuthorization = true
+            store.locationManager.requestLocation()
+        }
+    }
+
+    private func locationAccessChanged(_ access: LocationAccess) {
+        guard recenterOnAuthorization, access != .notDetermined else { return }
+        recenterOnAuthorization = false
+        if access == .authorized { recenterOnUser() }
     }
 
     // With no location fix, fit the plotted stations: .automatic re-fits as
@@ -95,6 +125,15 @@ struct APRSMapView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 13))
 
                     Spacer()
+
+                    HeaderIconBtn(
+                        systemImage: position.followsUserLocation && locationAccess == .authorized
+                            ? "location.fill" : "location",
+                        action: recenterOnUser
+                    )
+                    // fill2 alone vanishes over map tiles; back it like the pill.
+                    .background(.ultraThinMaterial, in: Circle())
+                    .accessibilityLabel("Center on my location")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -124,6 +163,17 @@ struct APRSMapView: View {
         .toolbar(.hidden, for: .navigationBar)
         .onChange(of: store.pendingMapFocusID) { _, id in focusPendingEntry(id) }
         .onChange(of: stations.isEmpty) { _, _ in frameStations() }
+        .onChange(of: locationAccess) { _, access in locationAccessChanged(access) }
+        .alert("Location Unavailable", isPresented: $showLocationUnavailable) {
+            if locationAccess != .restricted {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(locationAccess.explanation ?? "Your location isn't available right now.")
+        }
         .onAppear {
             frameStations()
             focusPendingEntry(store.pendingMapFocusID)

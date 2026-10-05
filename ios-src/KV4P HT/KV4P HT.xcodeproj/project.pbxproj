@@ -596,7 +596,7 @@
 				INFOPLIST_FILE = "KV4P HT/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Pocket HT";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Pocket HT uses Bluetooth to communicate with your KV4P BLE radio.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Pocket HT uses your location only for features you turn on: APRS position beacons, which publicly broadcast your position over the radio, and filtering APRS notifications by distance.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Pocket HT uses your location only for features you turn on: APRS position beacons, which publicly broadcast your position over the radio, filtering APRS notifications by distance, and centering the map on you.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Pocket HT uses the microphone to transmit voice audio over the radio.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Pocket HT transcribes received radio audio into live captions entirely on this device. Audio is never sent to a server.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
@@ -633,7 +633,7 @@
 				INFOPLIST_FILE = "KV4P HT/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Pocket HT";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Pocket HT uses Bluetooth to communicate with your KV4P BLE radio.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Pocket HT uses your location only for features you turn on: APRS position beacons, which publicly broadcast your position over the radio, and filtering APRS notifications by distance.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Pocket HT uses your location only for features you turn on: APRS position beacons, which publicly broadcast your position over the radio, filtering APRS notifications by distance, and centering the map on you.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Pocket HT uses the microphone to transmit voice audio over the radio.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Pocket HT transcribes received radio audio into live captions entirely on this device. Audio is never sent to a server.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = NO;
