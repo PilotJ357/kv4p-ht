@@ -89,11 +89,6 @@ public:
     _slotPending = false;
   }
 
-  void clear() {
-    _head = _tail = _count = 0;
-    _slotPending = false;
-  }
-
   void setTxDelay(uint8_t value) { _txDelay = value; }
   void setPersist(uint8_t value) { _persist = value; }
   void setSlotTime(uint8_t value) { _slotTime = value; }

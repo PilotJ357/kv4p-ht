@@ -492,17 +492,8 @@ void handleCommands(ProtocolSession &session, RcvCommand command, uint8_t *param
           const bool freeDvModeChanged =
               ((incomingState.flags ^ desiredState.flags) &
                HOST_STATE_FREEDV_2400B) != 0;
-          const bool txAllowedRevoked = txAllowedByHost()
-              && !(incomingState.flags & HOST_STATE_TX_ALLOWED);
           desiredState = incomingState;
           desiredState.flags &= HOST_STATE_GLOBAL_FLAG_MASK;
-          if (txAllowedRevoked && ax25TxScheduler.count()) {
-            // A frame still waiting on CSMA must not survive a TX revoke and
-            // key up later on whatever channel is configured by then.
-            _LOGW("TX_ALLOWED cleared; dropped %u queued AX.25 frame(s)", (unsigned)ax25TxScheduler.count());
-            ax25TxScheduler.clear();
-            ax25OverrideChannelPrepared = false;
-          }
           if (freeDvModeChanged) {
             latestRssi = 0;
             freeDvSquelch.reset();
