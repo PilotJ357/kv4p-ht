@@ -27,6 +27,8 @@ struct Memory: Identifiable, Codable {
     var notes: String = ""
     var scanEnabled: Bool = true
     var bandwidth: UInt8 = 0  // 0=wide 25kHz, 1=narrow 12.5kHz (RadioStore.bandwidth encoding)
+    // The default APRS memory: retuned when the APRS frequency setting changes.
+    var aprsRegionLinked: Bool = false
 
     var freqString: String { String(format: "%.3f", freq) }
     var offsetString: String {
@@ -56,6 +58,7 @@ extension Memory {
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         scanEnabled = try c.decodeIfPresent(Bool.self, forKey: .scanEnabled) ?? true
         bandwidth = try c.decodeIfPresent(UInt8.self, forKey: .bandwidth) ?? 0
+        aprsRegionLinked = try c.decodeIfPresent(Bool.self, forKey: .aprsRegionLinked) ?? false
     }
 }
 
@@ -67,6 +70,31 @@ struct CaptionLine: Identifiable {
     var active: Bool = false
     // SpeechManager segment feeding this line; nil for non-speech lines.
     var segmentID: Int? = nil
+}
+
+// Standard regional APRS frequencies offered in Settings. `setting` is the
+// stored aprsBeaconFrequency string.
+struct APRSRegion {
+    let setting: String
+    let label: String       // Settings picker label
+    let shortName: String   // used in the default APRS memory's name
+
+    var freq: Float { Float(setting) ?? 0 }
+    var memoryName: String { "APRS (\(shortName))" }
+
+    static let all: [APRSRegion] = [
+        APRSRegion(setting: "144.3900", label: "144.3900 (Americas)",       shortName: "US"),
+        APRSRegion(setting: "144.5750", label: "144.5750 (New Zealand)",    shortName: "NZ"),
+        APRSRegion(setting: "144.6400", label: "144.6400 (Japan)",          shortName: "JP"),
+        APRSRegion(setting: "144.6600", label: "144.6600 (Australia)",      shortName: "AU"),
+        APRSRegion(setting: "144.8000", label: "144.8000 (Europe/Africa)",  shortName: "EU"),
+        APRSRegion(setting: "145.1750", label: "145.1750 (Australia, alt)", shortName: "AU alt"),
+        APRSRegion(setting: "145.8250", label: "145.8250 (ISS/satellite)",  shortName: "ISS"),
+    ]
+
+    static func `for`(_ setting: String) -> APRSRegion? {
+        all.first { $0.setting == setting }
+    }
 }
 
 // MARK: - Radio Store
@@ -124,6 +152,7 @@ class RadioStore {
 
     // ── Memories
     private static let memoriesKey = "savedMemories"
+    private static let aprsMemorySeededKey = "aprsMemorySeeded"
     private var isInitializing = true
     var memories: [Memory] = [] {
         didSet {
@@ -170,6 +199,7 @@ class RadioStore {
             if !isInitializing {
                 saveAprsSettings()
                 ble.setRxAudioMuted(effectiveRxMuted)
+                syncAprsMemory()
             }
         }
     }
@@ -273,6 +303,7 @@ class RadioStore {
             ]
         }
         loadAprsSettings()
+        seedAprsMemoryIfNeeded()
         loadNotifySettings()
         if let raw = UserDefaults.standard.string(forKey: Self.themeModeKey),
            let mode = AppThemeMode(rawValue: raw) {
@@ -689,8 +720,8 @@ class RadioStore {
         return abs(currentFreq - aprsFreq) < 0.0005
     }
 
-    // Standard regional APRS frequencies (mirrors the Settings picker).
-    static let knownAprsFrequencies: [Float] = [144.390, 144.575, 144.640, 144.660, 144.800, 145.175, 145.825]
+    // Standard regional APRS frequencies (the Settings picker's options).
+    static let knownAprsFrequencies: [Float] = APRSRegion.all.map(\.freq)
 
     // APRS counts as active when tuned to the configured APRS frequency or any
     // standard one — covers the "Current" beacon setting too.
@@ -903,6 +934,36 @@ class RadioStore {
         vfoOffset = offset
         vfoToneIndex = toneIndex
         sendRadioState()
+    }
+
+    // ── APRS memory
+    // Seeded once (fresh installs and upgrades); deleting it is respected.
+    // Built on the configured APRS frequency, falling back to US 144.390.
+    private func seedAprsMemoryIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.aprsMemorySeededKey) else { return }
+        defaults.set(true, forKey: Self.aprsMemorySeededKey)
+        guard !memories.contains(where: \.aprsRegionLinked) else { return }
+        let region = APRSRegion.for(aprsBeaconFrequency) ?? APRSRegion.all[0]
+        memories.append(Memory(
+            name: region.memoryName, group: "APRS", freq: region.freq,
+            offset: 0, plTone: 0, squelch: 2, isRepeater: false,
+            notes: "APRS", scanEnabled: false, aprsRegionLinked: true))
+        saveMemories()
+    }
+
+    // Retunes the linked APRS memory to the selected region. "Current" has
+    // no region, so the memory keeps its last frequency. A user-renamed
+    // memory keeps its name.
+    private func syncAprsMemory() {
+        guard let region = APRSRegion.for(aprsBeaconFrequency),
+              let idx = memories.firstIndex(where: \.aprsRegionLinked) else { return }
+        var mem = memories[idx]
+        if APRSRegion.all.contains(where: { $0.memoryName == mem.name }) {
+            mem.name = region.memoryName
+        }
+        mem.freq = region.freq
+        memories[idx] = mem
     }
 
     private func saveMemories() {

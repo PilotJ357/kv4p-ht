@@ -11,6 +11,20 @@ struct MemoryCodingTests {
         let mem = try JSONDecoder().decode(Memory.self, from: Data(json.utf8))
         #expect(mem.bandwidth == 0)
         #expect(mem.scanEnabled)
+        #expect(!mem.aprsRegionLinked)
+    }
+
+    @Test func aprsRegionLinkRoundTrips() throws {
+        let mem = Memory(name: "APRS (US)", group: "APRS", freq: 144.39, offset: 0, plTone: 0,
+                         squelch: 2, isRepeater: false, aprsRegionLinked: true)
+        let decoded = try JSONDecoder().decode(Memory.self, from: JSONEncoder().encode(mem))
+        #expect(decoded.aprsRegionLinked)
+    }
+
+    @Test func aprsRegionLookup() {
+        #expect(APRSRegion.for("144.3900")?.memoryName == "APRS (US)")
+        #expect(APRSRegion.for("144.8000")?.freq == 144.8)
+        #expect(APRSRegion.for("Current") == nil)
     }
 
     @Test func bandwidthRoundTrips() throws {
