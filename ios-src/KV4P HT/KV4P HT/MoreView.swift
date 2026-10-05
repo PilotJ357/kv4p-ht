@@ -252,7 +252,7 @@ struct SettingsView: View {
                                 accessory: KVToggle(isOn: $store.liveCaptions) as (any View))
                         if store.captionsStatus.opensSettings {
                             Button(action: openAppSettings) {
-                                ListRow(title: "Allow in Settings", isLast: false, dense: true)
+                                ListRow(title: "Open Settings", isLast: false, dense: true)
                             }
                             .buttonStyle(.plain)
                         }

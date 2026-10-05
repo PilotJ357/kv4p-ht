@@ -1085,7 +1085,7 @@ struct CaptionsSheet: View {
             case .off:
                 statusButton("Turn On Live Captions") { store.liveCaptions = true }
             case .needsPermission:
-                statusButton("Allow Speech Recognition") {
+                statusButton("Continue") {
                     store.requestCaptionsPermissionIfNeeded()
                 }
             case .denied:
