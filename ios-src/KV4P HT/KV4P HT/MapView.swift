@@ -119,6 +119,9 @@ struct APRSMapView: View {
             }
         }
         .environment(\.theme, store.theme)
+        // The floating pill is the header; an untitled nav bar would still
+        // reserve its height and push the pill down.
+        .toolbar(.hidden, for: .navigationBar)
         .onChange(of: store.pendingMapFocusID) { _, id in focusPendingEntry(id) }
         .onChange(of: stations.isEmpty) { _, _ in frameStations() }
         .onAppear {
