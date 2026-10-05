@@ -515,9 +515,9 @@ struct BeaconSettingsView: View {
                 VStack(spacing: 4) {
                     ListGroupView(
                         header: "Position beacon",
-                        footer: "Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected, including in the background. Requires a callsign and APRS frequency configured in Settings."
+                        footer: "Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected, including in the background. Requires a callsign and APRS frequency configured in Settings.\n\nWith Interrupt reception off, a scheduled beacon that comes due while a signal is being received waits, re-checking every \(Int(BeaconDeferGate.retryInterval)) s until the channel is quiet. Beacon now always sends immediately."
                     ) {
-                        ListRow(title: "Beacon position", isLast: false, dense: true,
+                        ListRow(title: "Beacon position", isLast: false,
                                 accessory: KVToggle(isOn: beaconEnabledBinding) as (any View))
                         PickerRow(title: "Interval",
                                   selection: Binding(
@@ -525,7 +525,9 @@ struct BeaconSettingsView: View {
                                       set: { store.aprsBeaconIntervalMin = Int($0.dropLast(4)) ?? 15 }),
                                   options: intervals.map { "\($0) min" },
                                   isLast: false)
-                        ListRow(title: "Approximate position", isLast: true, dense: true,
+                        ListRow(title: "Interrupt reception", isLast: false,
+                                accessory: KVToggle(isOn: $store.aprsBeaconInterruptRx) as (any View))
+                        ListRow(title: "Approximate position", isLast: true,
                                 accessory: KVToggle(isOn: $store.aprsPositionApprox) as (any View))
                     }
 
@@ -568,7 +570,7 @@ struct BeaconSettingsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 13))
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.top, 20)
 
                     if let status = beaconStatus {
                         Text(status)
@@ -645,7 +647,7 @@ struct BeaconSettingsView: View {
     private func sendBeaconNow() {
         beaconStatus = "Sending…"
         Task {
-            let result = await store.aprs.sendPositionBeacon()
+            let result = await store.aprs.sendManualBeacon()
             switch result {
             case .sent:       beaconStatus = "Beacon sent"
             case .noLocation(let access): beaconStatus = access.beaconStatus
