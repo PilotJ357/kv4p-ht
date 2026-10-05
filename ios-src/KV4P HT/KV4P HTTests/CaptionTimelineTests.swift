@@ -81,4 +81,33 @@ struct CaptionTimelineTests {
         #expect(CaptionTimeline.join("Hello.", " World.") == "Hello. World.")
         #expect(CaptionTimeline.join("", " World.") == "World.")
     }
+
+    @Test func longOpenSegmentSplitsOnFinalResult() {
+        var t = CaptionTimeline()
+        t.begin(id: 1, at: 0)
+        _ = t.apply(text: "the forecast", start: 1, isFinal: true)
+        // Too short: no split.
+        let r1 = t.splitIfLong(newID: 2, at: 5, maxDuration: 20)
+        #expect(!r1)
+        _ = t.apply(text: "for tonight", start: 18, isFinal: true)
+        let r2 = t.splitIfLong(newID: 2, at: 21, maxDuration: 20)
+        #expect(r2)
+        #expect(t.segments.map(\.id) == [1, 2])
+        #expect(t.segments[0].end == 21)
+        // Later audio routes to the new line; the old line keeps its text.
+        let winds = t.apply(text: "winds", start: 21.5, isFinal: false)
+        #expect(winds?.id == 2)
+        #expect(t.segments[0].text == "the forecast for tonight")
+    }
+
+    @Test func noSplitWithoutFinalizedTextOrAfterEnd() {
+        var t = CaptionTimeline()
+        t.begin(id: 1, at: 0)
+        let r3 = t.splitIfLong(newID: 2, at: 30, maxDuration: 20)
+        #expect(!r3)
+        _ = t.apply(text: "hello", start: 1, isFinal: true)
+        t.end(at: 25)
+        let r4 = t.splitIfLong(newID: 2, at: 30, maxDuration: 20)
+        #expect(!r4)
+    }
 }

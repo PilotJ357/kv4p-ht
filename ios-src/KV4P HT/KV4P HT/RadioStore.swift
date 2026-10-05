@@ -542,15 +542,13 @@ class RadioStore {
         }
 
         speechManager.onSegmentFinalized = { [weak self] segmentID in
+            self?.finalizeCaptionLine(segmentID: segmentID)
+        }
+
+        speechManager.onSegmentSplit = { [weak self] oldID, newID in
             guard let self else { return }
-            for i in self.captionLines.indices where self.captionLines[i].segmentID == segmentID {
-                self.captionLines[i].active = false
-                self.logTranscript(self.captionLines[i])
-            }
-            self.captionLines.removeAll { $0.text.isEmpty && !$0.active }
-            if self.captionLines.count > 100 {
-                self.captionLines.removeFirst(self.captionLines.count - 100)
-            }
+            self.finalizeCaptionLine(segmentID: oldID)
+            self.appendNewCaptionLine(segmentID: newID)
         }
 
         // The analyzer session died while a continuous signal may still
@@ -566,6 +564,17 @@ class RadioStore {
         }
 
         refreshCaptionsStatus()
+    }
+
+    private func finalizeCaptionLine(segmentID: Int) {
+        for i in captionLines.indices where captionLines[i].segmentID == segmentID {
+            captionLines[i].active = false
+            logTranscript(captionLines[i])
+        }
+        captionLines.removeAll { $0.text.isEmpty && !$0.active }
+        if captionLines.count > 100 {
+            captionLines.removeFirst(captionLines.count - 100)
+        }
     }
 
     private func logTranscript(_ line: CaptionLine) {
