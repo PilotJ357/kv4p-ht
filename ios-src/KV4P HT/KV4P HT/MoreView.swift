@@ -352,13 +352,23 @@ private struct TxTimeoutRow: View {
                 .font(.system(size: 16.5, weight: .medium))
                 .foregroundStyle(t.label)
             Spacer()
-            Picker("TX time-out", selection: $store.txTimeoutSeconds) {
-                ForEach(TxTimeout.options, id: \.self) { secs in
-                    Text(TxTimeout.label(secs)).tag(secs)
+            // Menu with a custom label: a .menu Picker pads its trailing
+            // edge, leaving the value inset from the other rows' values.
+            Menu {
+                Picker("TX time-out", selection: $store.txTimeoutSeconds) {
+                    ForEach(TxTimeout.options, id: \.self) { secs in
+                        Text(TxTimeout.label(secs)).tag(secs)
+                    }
                 }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(TxTimeout.label(store.txTimeoutSeconds))
+                        .font(.system(size: 16))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(t.label2)
             }
-            .pickerStyle(.menu)
-            .tint(t.label2)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 46)
