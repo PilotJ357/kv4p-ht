@@ -1,12 +1,7 @@
 name: Android Build
+# APK builds disabled; run manually from the Actions tab if needed.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  release:
-    types: [created]
+  workflow_dispatch:
 
 concurrency:
   group: android-build-${{ github.event.pull_request.number || github.ref }}
