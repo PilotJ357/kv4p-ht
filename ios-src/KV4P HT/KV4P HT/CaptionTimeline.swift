@@ -54,6 +54,17 @@ nonisolated struct CaptionTimeline {
         return (segments[i].id, segments[i].text)
     }
 
+    // Continuous signals (NOAA weather, a stuck carrier) never close
+    // squelch, so the open segment would never finalize. Once it has run
+    // `maxDuration` of audio, a finalized result ending at `end` starts a new
+    // segment `newID` there; later results route to it. Returns whether it split.
+    mutating func splitIfLong(newID: Int, at end: TimeInterval, maxDuration: TimeInterval) -> Bool {
+        guard let last = segments.last, last.end == nil,
+              end - last.start >= maxDuration, !last.finalized.isEmpty else { return false }
+        begin(id: newID, at: end)
+        return true
+    }
+
     static func join(_ a: String, _ b: String) -> String {
         let b = b.trimmingCharacters(in: .whitespaces)
         if a.isEmpty { return b }

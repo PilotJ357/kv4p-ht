@@ -23,6 +23,8 @@ class SpeechManager {
     // Transmission end that arrived before the analyzer was ready.
     private var pendingFinalize: (time: CMTime, segmentID: Int)?
     private let feed = AudioFeed()
+    // Audio a caption line may span before rolling over mid-transmission.
+    private static let maxLineDuration: TimeInterval = 20
 
     private static let hamVocab = [
         "CQ", "QSO", "QTH", "QSL", "QRZ", "QRM", "QRN", "QRP", "QRO",
@@ -40,6 +42,9 @@ class SpeechManager {
     var onPartialResult: ((Int, String) -> Void)?
     // A caption line's transmission ended and its text is final.
     var onSegmentFinalized: ((Int) -> Void)?
+    // A long transmission rolled over to a new caption line (old, new); the
+    // old line's text is final.
+    var onSegmentSplit: ((Int, Int) -> Void)?
     // The analyzer session failed; captions must be restarted.
     var onSessionFailed: (() -> Void)?
     // Language support became known (supportsOnDeviceRecognition changed).
@@ -213,6 +218,14 @@ class SpeechManager {
                 if let line = timeline.apply(text: text, start: result.range.start.seconds,
                                              isFinal: result.isFinal) {
                     onPartialResult?(line.id, line.text)
+                    if result.isFinal, line.id == liveSegmentID,
+                       timeline.splitIfLong(newID: nextSegmentID + 1,
+                                            at: result.range.end.seconds,
+                                            maxDuration: Self.maxLineDuration) {
+                        nextSegmentID += 1
+                        liveSegmentID = nextSegmentID
+                        onSegmentSplit?(line.id, nextSegmentID)
+                    }
                 }
             }
             // Results only end when the session is stopped; anything else

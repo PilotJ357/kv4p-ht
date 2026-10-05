@@ -70,6 +70,9 @@ struct CaptionLine: Identifiable {
     var active: Bool = false
     // SpeechManager segment feeding this line; nil for non-speech lines.
     var segmentID: Int? = nil
+    var date = Date()
+    var freq: Float = 0
+    var channel: String? = nil
 }
 
 // Standard regional APRS frequencies offered in Settings. `setting` is the
@@ -280,6 +283,11 @@ class RadioStore {
             requestCaptionsPermissionIfNeeded()
         }
     }
+    // Keep finalized caption lines in transcriptLog (on device only).
+    var saveTranscripts: Bool = false {
+        didSet { if !isInitializing { UserDefaults.standard.set(saveTranscripts, forKey: Self.saveTranscriptsKey) } }
+    }
+    private(set) var transcriptLog = TranscriptLog()
     var stickyPTT: Bool = false
     // Voice TX time-out in seconds (0 = off); see TxTimeout.
     var txTimeoutSeconds: Int = TxTimeout.defaultSeconds {
@@ -334,6 +342,8 @@ class RadioStore {
         if let s = UserDefaults.standard.object(forKey: Self.txTimeoutKey) as? Int {
             txTimeoutSeconds = s
         }
+        saveTranscripts = UserDefaults.standard.bool(forKey: Self.saveTranscriptsKey)
+        transcriptLog = TranscriptLog.load()
         isInitializing = false
         configureSpeechManager()
         // Location is only used by features the user opted into.
@@ -423,6 +433,7 @@ class RadioStore {
     private static let squelchKey = "squelchLevel"
     private static let txLicenseAckKey = "txLicenseAcknowledged"
     private static let txTimeoutKey = "txTimeoutSeconds"
+    private static let saveTranscriptsKey = "saveTranscripts"
 
     private struct APRSSettings: Codable {
         var callsign: String
@@ -526,18 +537,19 @@ class RadioStore {
             guard let self else { return }
             if let idx = self.captionLines.lastIndex(where: { $0.segmentID == segmentID }) {
                 self.captionLines[idx].text = text
+                // A late result for a line that already finalized.
+                if !self.captionLines[idx].active { self.logTranscript(self.captionLines[idx]) }
             }
         }
 
         speechManager.onSegmentFinalized = { [weak self] segmentID in
+            self?.finalizeCaptionLine(segmentID: segmentID)
+        }
+
+        speechManager.onSegmentSplit = { [weak self] oldID, newID in
             guard let self else { return }
-            for i in self.captionLines.indices where self.captionLines[i].segmentID == segmentID {
-                self.captionLines[i].active = false
-            }
-            self.captionLines.removeAll { $0.text.isEmpty && !$0.active }
-            if self.captionLines.count > 100 {
-                self.captionLines.removeFirst(self.captionLines.count - 100)
-            }
+            self.finalizeCaptionLine(segmentID: oldID)
+            self.appendNewCaptionLine(segmentID: newID)
         }
 
         // The analyzer session died while a continuous signal may still
@@ -553,6 +565,34 @@ class RadioStore {
         }
 
         refreshCaptionsStatus()
+    }
+
+    private func finalizeCaptionLine(segmentID: Int) {
+        for i in captionLines.indices where captionLines[i].segmentID == segmentID {
+            captionLines[i].active = false
+            logTranscript(captionLines[i])
+        }
+        captionLines.removeAll { $0.text.isEmpty && !$0.active }
+        if captionLines.count > 100 {
+            captionLines.removeFirst(captionLines.count - 100)
+        }
+    }
+
+    private func logTranscript(_ line: CaptionLine) {
+        guard saveTranscripts else { return }
+        transcriptLog.upsert(TranscriptEntry(id: line.id, date: line.date, freq: line.freq,
+                                        channel: line.channel, text: line.text))
+        transcriptLog.save()
+    }
+
+    func deleteTranscripts(ids: Set<UUID>) {
+        transcriptLog.remove(ids: ids)
+        transcriptLog.save()
+    }
+
+    func clearTranscripts() {
+        transcriptLog.removeAll()
+        transcriptLog.save()
     }
 
     // Re-derives captionsStatus from the toggle, permission, and on-device
@@ -628,7 +668,9 @@ class RadioStore {
             time: formatter.string(from: Date()),
             text: "",
             active: true,
-            segmentID: segmentID
+            segmentID: segmentID,
+            freq: currentFreq,
+            channel: memory(for: currentFreq)?.name
         ))
     }
 

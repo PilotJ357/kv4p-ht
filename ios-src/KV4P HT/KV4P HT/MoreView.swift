@@ -11,6 +11,7 @@ struct MoreView: View {
     @State private var showPosition = false
     @State private var showPrivacy = false
     @State private var showAbout = false
+    @State private var showTranscripts = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,6 +33,15 @@ struct MoreView: View {
                                 title: "My position & beacon",
                                 value: store.aprsBeaconEnabled ? "On" : "Off",
                                 leading: IconTile(color: t.green, systemImage: "location.fill") as (any View),
+                                isLast: false
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        Button { showTranscripts = true } label: {
+                            ListRow(
+                                title: "Transcript log",
+                                value: store.transcriptLog.entries.isEmpty ? nil : "\(store.transcriptLog.entries.count)",
+                                leading: IconTile(color: t.amber, systemImage: "captions.bubble.fill") as (any View),
                                 isLast: true
                             )
                         }
@@ -114,6 +124,15 @@ struct MoreView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showTranscripts) {
+            NavigationStack {
+                TranscriptLogView(store: store, backLabel: "More")
+            }
+            .environment(\.theme, store.theme)
+            .preferredColorScheme(store.theme.isDark ? .dark : .light)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showPrivacy) {
             NavigationStack {
                 PrivacyPolicyView()
@@ -141,7 +160,7 @@ struct SettingsView: View {
     private let aprsFrequencyLabels = ["Current"] + APRSRegion.all.map(\.label)
 
     private var captionsFooter: String {
-        let onDevice = "On-device speech recognition. No data sent to the cloud."
+        let onDevice = "On-device speech recognition. No data sent to the cloud. Saved transcripts stay on this device."
         switch store.captionsStatus {
         case .denied, .restricted, .unavailable:
             return store.captionsStatus.message(language: store.captionLanguage) ?? onDevice
@@ -229,14 +248,24 @@ struct SettingsView: View {
                         footer: captionsFooter
                     ) {
                         ListRow(title: "Live captions",
-                                isLast: !store.captionsStatus.opensSettings, dense: true,
+                                isLast: false, dense: true,
                                 accessory: KVToggle(isOn: $store.liveCaptions) as (any View))
                         if store.captionsStatus.opensSettings {
                             Button(action: openAppSettings) {
-                                ListRow(title: "Allow in Settings", isLast: true, dense: true)
+                                ListRow(title: "Allow in Settings", isLast: false, dense: true)
                             }
                             .buttonStyle(.plain)
                         }
+                        ListRow(title: "Save transcripts", isLast: false, dense: true,
+                                accessory: KVToggle(isOn: $store.saveTranscripts) as (any View))
+                        NavigationLink {
+                            TranscriptLogView(store: store)
+                        } label: {
+                            ListRow(title: "Transcript log",
+                                    value: "\(store.transcriptLog.entries.count)",
+                                    isLast: true, dense: true)
+                        }
+                        .buttonStyle(.plain)
                     }
                     // Turning captions on asks for speech permission (in
                     // RadioStore); if it can't work, say why right away.

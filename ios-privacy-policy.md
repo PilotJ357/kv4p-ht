@@ -1,6 +1,6 @@
 # KV4P HT for iOS — Privacy Policy
 
-Effective October 4, 2026
+Effective October 5, 2026
 
 KV4P HT is an open-source app for controlling a kv4p HT amateur radio over Bluetooth.
 The full source code is public, so everything below can be checked against the code.
@@ -61,7 +61,9 @@ More › My position & beacon.
 Live captions turn received radio audio into text using Apple's speech recognition, which
 runs **entirely on your device**. If your device or language doesn't support on-device
 recognition, captions stay off. Audio is never sent to Apple's servers or anywhere else.
-Captions are not saved.
+Captions are only saved if you turn on **Save transcripts** in Settings. Saved transcripts
+(text, frequency, and time) are stored on your device only, can be deleted from the
+Transcript log at any time, and are removed when you delete the app. Audio is never saved.
 
 ## Other device features
 
