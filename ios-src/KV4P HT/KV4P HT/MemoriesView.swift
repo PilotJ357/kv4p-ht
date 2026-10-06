@@ -70,7 +70,9 @@ struct MemoriesView: View {
                 .font(isEditMode ? .system(size: 17, weight: .semibold) : .system(size: 17))
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                HeaderIconBtn(systemImage: "plus") { showAddMemory = true }
+                Button { showAddMemory = true } label: {
+                    Label("Add Memory", systemImage: "plus")
+                }
             }
         }
         .sheet(isPresented: $showAddMemory) {

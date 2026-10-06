@@ -7,7 +7,6 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
     @Environment(\.openURL) private var openURL
     @Bindable var store: RadioStore
 
@@ -74,7 +73,7 @@ struct AboutView: View {
 
                 ListGroupView(header: "Privacy") {
                     NavigationLink {
-                        PrivacyPolicyView(backLabel: nil)
+                        PrivacyPolicyView()
                     } label: {
                         ListRow(title: "Privacy policy", isLast: false)
                     }
@@ -91,18 +90,6 @@ struct AboutView: View {
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("More")
-                            .font(.system(size: 17))
-                    }
-                }
-            }
-        }
     }
 }
 

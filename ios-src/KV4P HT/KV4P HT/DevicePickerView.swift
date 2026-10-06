@@ -27,43 +27,6 @@ struct DevicePickerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Button("Cancel") {
-                    ble.stopScan()
-                    dismiss()
-                }
-                .font(.system(size: 17))
-                .foregroundStyle(t.accent)
-
-                Spacer()
-
-                Text("Add Radio")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(t.label)
-
-                Spacer()
-
-                Button {
-                    ble.stopScan()
-                    ble.startScan()
-                } label: {
-                    if scanning {
-                        ProgressView()
-                            .tint(t.accent)
-                            .frame(width: 32, height: 32)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(t.accent)
-                            .frame(width: 32, height: 32)
-                    }
-                }
-                .disabled(ble.isDemo || ble.bleState == .connecting || ble.bleState == .connected)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-
             // State banner
             HStack(spacing: 10) {
                 if scanning || ble.bleState == .connecting || ble.bleState == .connected {
@@ -87,6 +50,7 @@ struct DevicePickerView: View {
                 }
             }
             .padding(.horizontal, 20)
+            .padding(.top, 8)
             .padding(.bottom, 14)
 
             if ble.bleUnavailable {
@@ -164,7 +128,30 @@ struct DevicePickerView: View {
                 .padding(.bottom, 20)
             }
         }
-                .background(t.bg.ignoresSafeArea())
+        .background(t.bg.ignoresSafeArea())
+        .navigationTitle("Add Radio")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(role: .close) {
+                    ble.stopScan()
+                    dismiss()
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    ble.stopScan()
+                    ble.startScan()
+                } label: {
+                    if scanning {
+                        ProgressView()
+                    } else {
+                        Label("Scan Again", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(ble.isDemo || ble.bleState == .connecting || ble.bleState == .connected)
+            }
+        }
         .onAppear {
             if ble.bleState == .idle { ble.startScan() }
         }

@@ -110,34 +110,6 @@ struct APRSMapView: View {
             .ignoresSafeArea()
 
             VStack {
-                HStack {
-                    HStack(spacing: 8) {
-                        Image(systemName: "map")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(t.label)
-                        Text("APRS Map")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(t.label)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
-
-                    Spacer()
-
-                    HeaderIconBtn(
-                        systemImage: position.followsUserLocation && locationAccess == .authorized
-                            ? "location.fill" : "location",
-                        action: recenterOnUser
-                    )
-                    // fill2 alone vanishes over map tiles; back it like the pill.
-                    .background(.ultraThinMaterial, in: Circle())
-                    .accessibilityLabel("Center on my location")
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-
                 Spacer()
 
                 if stations.isEmpty {
@@ -151,16 +123,23 @@ struct APRSMapView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                    .glassEffect(in: .rect(cornerRadius: 13))
                     .padding(.bottom, 24)
                 }
             }
         }
         .environment(\.theme, store.theme)
-        // The floating pill is the header; an untitled nav bar would still
-        // reserve its height and push the pill down.
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle("APRS Map")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: recenterOnUser) {
+                    Label("Center on my location",
+                          systemImage: position.followsUserLocation && locationAccess == .authorized
+                              ? "location.fill" : "location")
+                }
+            }
+        }
         .onChange(of: store.pendingMapFocusID) { _, id in focusPendingEntry(id) }
         .onChange(of: stations.isEmpty) { _, _ in frameStations() }
         .onChange(of: locationAccess) { _, access in locationAccessChanged(access) }
@@ -260,97 +239,5 @@ struct StationPin: View {
         }
         .scaleEffect(isSelected ? 1.15 : 1.0)
         .animation(reduceMotion ? nil : .spring(response: 0.2), value: isSelected)
-    }
-}
-
-// MARK: - Bottom sheet card
-
-struct BottomSheetCard: View {
-    @Environment(\.theme) var t
-    var station: MapStation
-    var totalStations: Int
-    var moving: Int
-
-    private var stationColor: Color {
-        switch station.color {
-        case "green": return t.green
-        case "amber": return t.amber
-        default:      return t.accent
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(t.label3)
-                .frame(width: 36, height: 5)
-                .padding(.top, 12)
-                .padding(.bottom, 12)
-
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(stationColor.opacity(0.13))
-                    .frame(width: 40, height: 40)
-                    .overlay(
-                        Image(systemName: station.kind == .mobile ? "car" : "antenna.radiowaves.left.and.right")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(stationColor)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(station.callsign)
-                        .font(.system(size: 16, weight: .bold, design: .monospaced))
-                        .foregroundStyle(t.label)
-                    Text(station.callsign)
-                        .font(.system(size: 13))
-                        .foregroundStyle(t.label2)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(t.label2)
-                    .frame(width: 34, height: 34)
-                    .background(t.fill)
-                    .clipShape(Circle())
-            }
-            .padding(.horizontal, 16)
-
-            Divider()
-                .padding(.horizontal, 0)
-                .padding(.top, 12)
-                .background(t.sep)
-
-            HStack(spacing: 18) {
-                StatTile(value: "\(totalStations)", label: "Stations")
-                StatTile(value: "\(totalStations)", label: "Within 25mi")
-                StatTile(value: "\(moving)", label: "Moving")
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-        }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(t.hairline, lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.3), radius: 20, y: 8)
-    }
-}
-
-struct StatTile: View {
-    @Environment(\.theme) var t
-    var value: String
-    var label: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value)
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(t.label)
-            Text(label)
-                .font(.system(size: 11.5))
-                .foregroundStyle(t.label2)
-        }
     }
 }

@@ -47,7 +47,9 @@ struct VoiceView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                HeaderIconBtn(systemImage: "gearshape.fill") { showSettings = true }
+                Button { showSettings = true } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
             }
         }
         .sheet(isPresented: $showCaptions) {
@@ -60,15 +62,17 @@ struct VoiceView: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showDevicePicker) {
-            DevicePickerView(ble: store.ble)
-                .environment(\.theme, store.theme)
-                .preferredColorScheme(store.theme.isDark ? .dark : .light)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+            NavigationStack {
+                DevicePickerView(ble: store.ble)
+            }
+            .environment(\.theme, store.theme)
+            .preferredColorScheme(store.theme.isDark ? .dark : .light)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack {
-                SettingsView(store: store, backLabel: "Voice")
+                SettingsView(store: store, showsClose: true)
             }
             .environment(\.theme, store.theme)
             .preferredColorScheme(store.theme.isDark ? .dark : .light)

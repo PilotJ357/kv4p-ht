@@ -6,12 +6,6 @@ import UserNotifications
 struct MoreView: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
-    @State private var showSettings = false
-    @State private var showDeviceInfo = false
-    @State private var showPosition = false
-    @State private var showPrivacy = false
-    @State private var showAbout = false
-    @State private var showTranscripts = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +13,7 @@ struct MoreView: View {
                 VStack(spacing: 20) {
                     // Radio rows
                     ListGroupView {
-                        Button { showDeviceInfo = true } label: {
+                        NavigationLink { DeviceInfoView(store: store) } label: {
                             ListRow(
                                 title: "Device & firmware",
                                 value: store.ble.hello.map { "v\($0.firmwareVersion)" } ?? "–",
@@ -28,7 +22,7 @@ struct MoreView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        Button { showPosition = true } label: {
+                        NavigationLink { BeaconSettingsView(store: store) } label: {
                             ListRow(
                                 title: "My position & beacon",
                                 value: store.aprsBeaconEnabled ? "On" : "Off",
@@ -37,7 +31,7 @@ struct MoreView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        Button { showTranscripts = true } label: {
+                        NavigationLink { TranscriptLogView(store: store) } label: {
                             ListRow(
                                 title: "Transcript log",
                                 value: store.transcriptLog.entries.isEmpty ? nil : "\(store.transcriptLog.entries.count)",
@@ -50,7 +44,7 @@ struct MoreView: View {
 
                     // Settings / Privacy rows
                     ListGroupView {
-                        Button { showSettings = true } label: {
+                        NavigationLink { SettingsView(store: store) } label: {
                             ListRow(
                                 title: "Settings",
                                 leading: IconTile(color: Color(hex: "8E8E93"), systemImage: "gearshape.fill") as (any View),
@@ -58,7 +52,7 @@ struct MoreView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        Button { showPrivacy = true } label: {
+                        NavigationLink { PrivacyPolicyView() } label: {
                             ListRow(
                                 title: "Privacy",
                                 leading: IconTile(color: t.green, systemImage: "hand.raised.fill") as (any View),
@@ -66,7 +60,7 @@ struct MoreView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        Button { showAbout = true } label: {
+                        NavigationLink { AboutView(store: store) } label: {
                             ListRow(
                                 title: "About",
                                 leading: IconTile(color: t.accent, systemImage: "info.circle.fill") as (any View),
@@ -88,60 +82,6 @@ struct MoreView: View {
                 .background(t.bg.ignoresSafeArea())
         .navigationTitle("More")
         .navigationBarTitleDisplayMode(.large)
-        .sheet(isPresented: $showSettings) {
-            NavigationStack {
-                SettingsView(store: store)
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showDeviceInfo) {
-            NavigationStack {
-                DeviceInfoView(store: store)
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showPosition) {
-            NavigationStack {
-                BeaconSettingsView(store: store)
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showAbout) {
-            NavigationStack {
-                AboutView(store: store)
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showTranscripts) {
-            NavigationStack {
-                TranscriptLogView(store: store, backLabel: "More")
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(isPresented: $showPrivacy) {
-            NavigationStack {
-                PrivacyPolicyView()
-            }
-            .environment(\.theme, store.theme)
-            .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
     }
 }
 
@@ -151,7 +91,7 @@ struct SettingsView: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
-    var backLabel = "More"  // tab the sheet was opened from
+    var showsClose = false  // presented as a sheet (Voice tab) rather than pushed
     @State private var showAprsSquelchInfo = false
     @State private var captionsAlert: CaptionsStatus? = nil
     @Environment(\.openURL) private var openURL
@@ -317,14 +257,9 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text(backLabel)
-                            .font(.system(size: 17))
-                    }
+            if showsClose {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .close) { dismiss() }
                 }
             }
         }
@@ -469,7 +404,6 @@ private struct SquelchSliderRow: View {
 
 struct DeviceInfoView: View {
     @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
 
     var body: some View {
@@ -500,18 +434,6 @@ struct DeviceInfoView: View {
                 .background(t.bg.ignoresSafeArea())
         .navigationTitle("Device & Firmware")
         .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("More")
-                            .font(.system(size: 17))
-                    }
-                }
-            }
-        }
         .environment(\.theme, store.theme)
     }
 }
@@ -520,7 +442,6 @@ struct DeviceInfoView: View {
 
 struct BeaconSettingsView: View {
     @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
     @State private var beaconStatus: String? = nil
     @State private var consentAction: ConsentAction? = nil
@@ -643,18 +564,6 @@ struct BeaconSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text(Self.consentMessage)
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("More")
-                            .font(.system(size: 17))
-                    }
-                }
-            }
         }
         .environment(\.theme, store.theme)
     }

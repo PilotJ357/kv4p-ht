@@ -390,21 +390,3 @@ extension EnvironmentValues {
         set { self[MPVolumeViewKey.self] = newValue }
     }
 }
-
-struct HeaderIconBtn: View {
-    @Environment(\.theme) var t
-    var systemImage: String
-    var tint: Color? = nil
-    var action: () -> Void = {}
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(tint ?? t.accent)
-                .frame(width: 32, height: 32)
-                .background(t.fill2)
-                .clipShape(Circle())
-        }
-    }
-}
