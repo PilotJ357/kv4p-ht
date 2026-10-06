@@ -2,15 +2,27 @@ import Speech
 import Testing
 @testable import KV4P_HT
 
-private func status(enabled: Bool = true,
+private func status(osSupported: Bool = true,
+                    enabled: Bool = true,
                     _ auth: SFSpeechRecognizerAuthorizationStatus,
                     onDevice: Bool = true) -> CaptionsStatus {
-    CaptionsStatus.resolve(enabled: enabled, authorization: auth, supportsOnDevice: onDevice)
+    CaptionsStatus.resolve(osSupported: osSupported, enabled: enabled,
+                           authorization: auth, supportsOnDevice: onDevice)
 }
 
 struct CaptionsStatusTests {
 
-    @Test func offWinsOverEverything() {
+    // Before iOS 26 nothing the user does can enable captions, and the
+    // permission prompt must never be shown.
+    @Test func olderOSWinsOverEverything() {
+        for auth: SFSpeechRecognizerAuthorizationStatus in [.notDetermined, .denied, .restricted, .authorized] {
+            for enabled in [false, true] {
+                #expect(status(osSupported: false, enabled: enabled, auth) == .needsNewerOS)
+            }
+        }
+    }
+
+    @Test func offWinsOverPermissionAndSupport() {
         for auth: SFSpeechRecognizerAuthorizationStatus in [.notDetermined, .denied, .restricted, .authorized] {
             #expect(status(enabled: false, auth) == .off)
             #expect(status(enabled: false, auth, onDevice: false) == .off)
@@ -43,14 +55,14 @@ struct CaptionsStatusTests {
 
     @Test func onlyDeniedOffersSettings() {
         #expect(CaptionsStatus.denied.opensSettings)
-        for s: CaptionsStatus in [.off, .needsPermission, .restricted, .unavailable, .listening] {
+        for s: CaptionsStatus in [.needsNewerOS, .off, .needsPermission, .restricted, .unavailable, .listening] {
             #expect(!s.opensSettings)
         }
     }
 
     @Test func messageOnlyWhenNotListening() {
         #expect(CaptionsStatus.listening.message(language: "English (US)") == nil)
-        for s: CaptionsStatus in [.off, .needsPermission, .denied, .restricted, .unavailable] {
+        for s: CaptionsStatus in [.needsNewerOS, .off, .needsPermission, .denied, .restricted, .unavailable] {
             #expect(s.message(language: "English (US)") != nil)
         }
         #expect(CaptionsStatus.unavailable.message(language: "Japanese")?.contains("Japanese") == true)
