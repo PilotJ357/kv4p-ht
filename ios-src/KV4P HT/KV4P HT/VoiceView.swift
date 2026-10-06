@@ -12,6 +12,7 @@ struct VoiceView: View {
     @State private var showCaptions = false
     @State private var showDevicePicker = false
     @State private var showSettings = false
+    @State private var stageLayout: StageLayout = .regular
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,13 +32,17 @@ struct VoiceView: View {
             .padding(.bottom, 2)
 
             switch store.voiceMode {
-            case .vfo:  VFOBody(store: store, showCaptions: $showCaptions)
+            case .vfo:  VFOBody(store: store, layout: stageLayout, showCaptions: $showCaptions)
             case .scan: ScanBody(store: store)
             }
 
-            Spacer(minLength: 0)
+            // Wide stage centers itself in the leftover height.
+            if stageLayout != .wide {
+                Spacer(minLength: 0)
+            }
         }
-                .background(t.bg.ignoresSafeArea())
+        .onGeometryChange(for: StageLayout.self) { StageLayout(size: $0.size) } action: { stageLayout = $0 }
+        .background(t.bg.ignoresSafeArea())
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -87,11 +92,27 @@ struct VoiceView: View {
     }
 }
 
+// MARK: - Stage layout
+
+// Picked from the space the Voice tab actually gets, not the device: iPhone
+// Duo resizes the app on fold/unfold, and its inner display is wide but no
+// taller than the outer one.
+nonisolated enum StageLayout: Equatable {
+    case regular, compact, wide
+
+    init(size: CGSize) {
+        if size.width >= 700 { self = .wide }
+        else if size.height < 560 { self = .compact }
+        else { self = .regular }
+    }
+}
+
 // MARK: - VFO body
 
 private struct VFOBody: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
+    var layout: StageLayout
     @Binding var showCaptions: Bool
 
     var body: some View {
@@ -109,6 +130,7 @@ private struct VFOBody: View {
             tone:         store.currentToneString,
             modeLabel:    band + "VFO",
             freqEditable: true,
+            layout:       layout,
             showCaptions: $showCaptions
         )
     }
@@ -127,7 +149,10 @@ private struct RadioStage: View {
     var tone:         String
     var modeLabel:    String
     var freqEditable: Bool = false
+    var layout:       StageLayout = .regular
     @Binding var showCaptions: Bool
+
+    private var compact: Bool { layout == .compact }
 
     @GestureState private var pttDown = false
     @State private var stickyPttActive = false
@@ -192,144 +217,38 @@ private struct RadioStage: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Mode chip
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(txApplied ? t.red : t.accent)
-                    .frame(width: 6, height: 6)
-                Text(chipLabel)
-                    .font(.system(size: 12.5, weight: .bold))
-                    .tracking(1)
-                    .foregroundStyle(t.label)
-                    .textCase(.uppercase)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(t.fill)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-            .padding(.top, 20)
-
-            // Frequency
-            Group {
-                if freqEditable {
-                    Button { showNumpad = true } label: {
-                        FreqReadout(freq: freq, state: rxState)
-                            .contentShape(Rectangle())
+        Group {
+            if layout == .wide {
+                // Readout beside the transmit controls so a wide window (iPhone
+                // Duo inner display) doesn't stretch everything edge to edge.
+                HStack(alignment: .center, spacing: 32) {
+                    VStack(spacing: 0) {
+                        readout
+                        infoPills
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    FreqReadout(freq: freq, state: rxState)
-                }
-            }
-            .padding(.top, 6)
-
-            // Channel name
-            VStack(spacing: 2) {
-                Text(channelName)
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(t.label)
-                Text(channelDesc)
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(t.label2)
-            }
-            .padding(.top, 2)
-
-            // S-meter + badge
-            HStack(spacing: 14) {
-                SMeter(level: store.meterSuppressed ? 0 : store.signalLevel,
-                       active: !store.meterSuppressed, rawRSSI: store.rawRSSI)
-                RxBadge(state: rxState)
-            }
-            .padding(.top, 8)
-
-            // Info pills — offset/tone open the channel-config editor
-            HStack(spacing: 8) {
-                Button { showOffsetTone = true } label: {
-                    InfoPill(key: "Offset", value: offset)
-                }
-                .buttonStyle(.plain)
-                Button { showOffsetTone = true } label: {
-                    InfoPill(key: "Tone", value: tone)
-                }
-                .buttonStyle(.plain)
-                InfoPill(key: "Power", value: store.txPower)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            .padding(.bottom, 14)
-
-            // PTT + controls row
-            HStack(spacing: 24) {
-                VStack(spacing: 8) {
-                    if store.stickyPTT {
-                        PTTButton(isDown: stickyPttActive, rxOnly: txBlocked, noMic: micDenied)
-                            .onTapGesture {
-                                guard !txBlocked else { return }
-                                if stickyPttActive {
-                                    stickyPttActive = false
-                                    sendPTT(false)
-                                } else {
-                                    stickyPttActive = keyIfAllowed()
-                                }
-                            }
-                    } else {
-                        PTTButton(isDown: holdKeyed, rxOnly: txBlocked, noMic: micDenied)
-                            .gesture(
-                                LongPressGesture(minimumDuration: 0.01)
-                                    .sequenced(before: DragGesture(minimumDistance: 0))
-                                    .updating($pttDown) { _, state, _ in state = true }
-                                    .onEnded { _ in sendPTT(false) }
-                            )
-                            .allowsHitTesting(!txBlocked)
-                            .onChange(of: pttDown) { _, down in
-                                if down {
-                                    holdKeyed = keyIfAllowed()
-                                } else {
-                                    holdKeyed = false
-                                    sendPTT(false)
-                                }
-                            }
+                    .frame(maxWidth: .infinity)
+                    VStack(spacing: 20) {
+                        pttControl
+                        controls
                     }
-                    if micDenied && !txBlocked {
-                        Button(action: openAppSettings) {
-                            Label("Open Settings", systemImage: "gear")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(t.accent)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(t.fill)
-                                .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Allow microphone access to transmit voice")
+                    .frame(width: 320)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .frame(maxHeight: .infinity)
+            } else {
+                VStack(spacing: 0) {
+                    readout
+                    infoPills
+                        .padding(.horizontal, 20)
+                    HStack(spacing: 24) {
+                        pttControl
+                        controls
+                            .frame(maxWidth: .infinity)
                     }
+                    .padding(.horizontal, 20)
                 }
-
-                VStack(spacing: 16) {
-                    SystemVolumeSlider()
-                    VolumeSlider(
-                        icon: "waveform",
-                        pct: Binding(
-                            get: { Double(store.squelch) / 9.0 },
-                            set: { store.squelch = UInt8(round($0 * 9.0)) }
-                        ),
-                        label: "SQ \(store.squelch)",
-                        editable: true,
-                        onEnded: { pct in
-                            store.squelch = UInt8(round(pct * 9.0))
-                            store.radio.setSquelch(store.squelch)
-                        }
-                    )
-                    SmallAction(
-                        systemImage: "captions.bubble",
-                        label:       "Captions",
-                        on:          showCaptions
-                    ) { showCaptions = true }
-                }
-                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 20)
         }
         .padding(.bottom, 8)
         // The controller already dropped PTT for the out-of-band tune; unlatch
@@ -367,6 +286,148 @@ private struct RadioStage: View {
                 .preferredColorScheme(store.theme.isDark ? .dark : .light)
                 .presentationDetents([.height(440)])
                 .presentationDragIndicator(.visible)
+        }
+    }
+
+    // Mode chip, frequency, channel name, S-meter.
+    private var readout: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(txApplied ? t.red : t.accent)
+                    .frame(width: 6, height: 6)
+                Text(chipLabel)
+                    .font(.system(size: 12.5, weight: .bold))
+                    .tracking(1)
+                    .foregroundStyle(t.label)
+                    .textCase(.uppercase)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(t.fill)
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .padding(.top, compact ? 12 : 20)
+
+            Group {
+                if freqEditable {
+                    Button { showNumpad = true } label: {
+                        FreqReadout(freq: freq, size: compact ? 62 : 74, state: rxState)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    FreqReadout(freq: freq, size: compact ? 62 : 74, state: rxState)
+                }
+            }
+            .padding(.top, 6)
+
+            VStack(spacing: 2) {
+                Text(channelName)
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(t.label)
+                Text(channelDesc)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(t.label2)
+            }
+            .padding(.top, 2)
+
+            HStack(spacing: 14) {
+                SMeter(level: store.meterSuppressed ? 0 : store.signalLevel,
+                       active: !store.meterSuppressed, rawRSSI: store.rawRSSI)
+                RxBadge(state: rxState)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    // Offset/tone open the channel-config editor.
+    private var infoPills: some View {
+        HStack(spacing: 8) {
+            Button { showOffsetTone = true } label: {
+                InfoPill(key: "Offset", value: offset)
+            }
+            .buttonStyle(.plain)
+            Button { showOffsetTone = true } label: {
+                InfoPill(key: "Tone", value: tone)
+            }
+            .buttonStyle(.plain)
+            InfoPill(key: "Power", value: store.txPower)
+        }
+        .padding(.top, 10)
+        .padding(.bottom, compact ? 10 : 14)
+    }
+
+    private var pttControl: some View {
+        VStack(spacing: 8) {
+            if store.stickyPTT {
+                PTTButton(isDown: stickyPttActive, rxOnly: txBlocked, noMic: micDenied,
+                          diameter: compact ? 136 : 168)
+                    .onTapGesture {
+                        guard !txBlocked else { return }
+                        if stickyPttActive {
+                            stickyPttActive = false
+                            sendPTT(false)
+                        } else {
+                            stickyPttActive = keyIfAllowed()
+                        }
+                    }
+            } else {
+                PTTButton(isDown: holdKeyed, rxOnly: txBlocked, noMic: micDenied,
+                          diameter: compact ? 136 : 168)
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.01)
+                            .sequenced(before: DragGesture(minimumDistance: 0))
+                            .updating($pttDown) { _, state, _ in state = true }
+                            .onEnded { _ in sendPTT(false) }
+                    )
+                    .allowsHitTesting(!txBlocked)
+                    .onChange(of: pttDown) { _, down in
+                        if down {
+                            holdKeyed = keyIfAllowed()
+                        } else {
+                            holdKeyed = false
+                            sendPTT(false)
+                        }
+                    }
+            }
+            if micDenied && !txBlocked {
+                Button(action: openAppSettings) {
+                    Label("Open Settings", systemImage: "gear")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(t.accent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(t.fill)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Allow microphone access to transmit voice")
+            }
+        }
+    }
+
+    // Volume, squelch, captions.
+    private var controls: some View {
+        VStack(spacing: 16) {
+            SystemVolumeSlider()
+            VolumeSlider(
+                icon: "waveform",
+                pct: Binding(
+                    get: { Double(store.squelch) / 9.0 },
+                    set: { store.squelch = UInt8(round($0 * 9.0)) }
+                ),
+                label: "SQ \(store.squelch)",
+                editable: true,
+                onEnded: { pct in
+                    store.squelch = UInt8(round(pct * 9.0))
+                    store.radio.setSquelch(store.squelch)
+                }
+            )
+            SmallAction(
+                systemImage: "captions.bubble",
+                label:       "Captions",
+                on:          showCaptions
+            ) { showCaptions = true }
         }
     }
 }
@@ -525,7 +586,10 @@ struct PTTButton: View {
     var rxOnly: Bool = false
     // Microphone access denied; voice PTT can't key. RX ONLY wins if both.
     var noMic: Bool = false
+    // Outer ring; inner ring, face, and glyph scale with it.
+    var diameter: CGFloat = 168
 
+    private var scale: CGFloat { diameter / 168 }
     private var inert: Bool { rxOnly || noMic }
     private var onAir: Bool { isDown && !inert }
     private var ringColor: Color { inert ? t.label3 : (onAir ? t.red : t.accent) }
@@ -555,20 +619,20 @@ struct PTTButton: View {
             Circle()
                 .stroke(ringColor, lineWidth: 2)
                 .opacity(onAir ? 0.5 : 0.22)
-                .frame(width: 168, height: 168)
+                .frame(width: diameter, height: diameter)
             Circle()
                 .stroke(ringColor, lineWidth: 1.5)
                 .opacity(onAir ? 0.35 : 0.14)
-                .frame(width: 148, height: 148)
+                .frame(width: 148 * scale, height: 148 * scale)
             Circle()
                 .fill(grad)
-                .frame(width: 132, height: 132)
+                .frame(width: 132 * scale, height: 132 * scale)
                 .shadow(color: inert ? .clear : (onAir ? t.red.opacity(0.53) : t.accent.opacity(0.27)), radius: 22)
                 .shadow(color: Color.black.opacity(0.35), radius: 15, y: 10)
                 .overlay(
                     VStack(spacing: 5) {
                         Image(systemName: inert ? "mic.slash.fill" : "mic.fill")
-                            .font(.system(size: 36, weight: .medium))
+                            .font(.system(size: 36 * scale, weight: .medium))
                             .foregroundStyle(labelColor)
                         Text(stateLabel)
                             .font(.system(size: 11.5, weight: .heavy))

@@ -42,15 +42,6 @@ struct ContentView: View {
             case .more:     return "ellipsis.circle"
             }
         }
-        var selectedIcon: String {
-            switch self {
-            case .voice:    return "waveform"
-            case .aprs:     return "message.fill"
-            case .map:      return "map.fill"
-            case .memories: return "star.fill"
-            case .more:     return "ellipsis.circle.fill"
-            }
-        }
     }
 
     private var theme: AppTheme { AppTheme.forMode(store.themeMode, systemColorScheme: systemColorScheme) }
@@ -60,36 +51,32 @@ struct ContentView: View {
             NavigationStack {
                 VoiceView(store: store)
             }
+            .tabItem { Label(Tab.voice.label, systemImage: Tab.voice.icon) }
             .tag(Tab.voice)
-            .toolbar(.hidden, for: .tabBar)
 
             NavigationStack {
                 APRSView(store: store)
             }
+            .tabItem { Label(Tab.aprs.label, systemImage: Tab.aprs.icon) }
             .tag(Tab.aprs)
-            .toolbar(.hidden, for: .tabBar)
 
             NavigationStack {
                 APRSMapView(store: store)
             }
+            .tabItem { Label(Tab.map.label, systemImage: Tab.map.icon) }
             .tag(Tab.map)
-            .toolbar(.hidden, for: .tabBar)
 
             NavigationStack {
                 MemoriesView(store: store)
             }
+            .tabItem { Label(Tab.memories.label, systemImage: Tab.memories.icon) }
             .tag(Tab.memories)
-            .toolbar(.hidden, for: .tabBar)
 
             NavigationStack {
                 MoreView(store: store)
             }
+            .tabItem { Label(Tab.more.label, systemImage: Tab.more.icon) }
             .tag(Tab.more)
-            .toolbar(.hidden, for: .tabBar)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            KVTabBar(tabs: Tab.allCases, selected: $selectedTab)
-                .environment(\.theme, theme)
         }
         .environment(\.theme, theme)
         .environment(\.mpVolumeView, mpVolumeView)
@@ -122,54 +109,6 @@ struct ContentView: View {
                 .frame(width: 1, height: 1)
                 .opacity(0.001)
                 .allowsHitTesting(false)
-        }
-    }
-}
-
-// MARK: - Custom Tab Bar
-
-struct KVTabBar: View {
-    // Hairline + button row. The bar's safeAreaInset doesn't reach content
-    // inside the TabView pages, so bottom-pinned overlays pad by this.
-    static let height: CGFloat = 49.5
-
-    @Environment(\.theme) var t
-    var tabs: [ContentView.Tab]
-    @Binding var selected: ContentView.Tab
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(t.hairline)
-                .frame(height: 0.5)
-            HStack(spacing: 0) {
-                ForEach(tabs, id: \.rawValue) { tab in
-                    let on = tab == selected
-                    Button {
-                        selected = tab
-                    } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: on ? tab.selectedIcon : tab.icon)
-                                .font(.system(size: 22, weight: on ? .semibold : .regular))
-                                .foregroundStyle(on ? t.accent : t.label2)
-                            Text(tab.label)
-                                .font(.system(size: 10.5, weight: on ? .semibold : .medium))
-                                .foregroundStyle(on ? t.accent : t.label2)
-                                .tracking(0.1)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 9)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .frame(height: 49)
-        }
-        .background {
-            t.chrome
-                .background(.ultraThinMaterial)
-                .ignoresSafeArea(.all, edges: .bottom)
         }
     }
 }

@@ -153,7 +153,7 @@ struct APRSMapView: View {
                     .padding(.vertical, 12)
                     .background(.ultraThinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 13))
-                    .padding(.bottom, KVTabBar.height + 24)
+                    .padding(.bottom, 24)
                 }
             }
         }
