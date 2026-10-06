@@ -27,47 +27,61 @@ struct MemoriesView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 4, pinnedViews: []) {
-                    ForEach(groupedMemories, id: \.name) { group in
-                        ListGroupView(header: "\(group.name) · \(group.items.count)") {
-                            ForEach(Array(group.items.enumerated()), id: \.element.id) { idx, mem in
-                                MemoryRow(memory: mem, channelNum: idx + 1, groupColor: t.accent, isLast: idx == group.items.count - 1, isActive: mem.id == store.activeMemoryId, isEditMode: isEditMode, onTap: {
-                                    if isEditMode {
-                                        editingMemory = mem
-                                    } else {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        store.applyMemory(mem)
-                                    }
-                                })
-                                .contextMenu {
-                                    Button {
-                                        editingMemory = mem
-                                    } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    Button(role: .destructive) {
-                                        store.deleteMemory(id: mem.id)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
+        List {
+            ForEach(groupedMemories, id: \.name) { group in
+                Section {
+                    ForEach(Array(group.items.enumerated()), id: \.element.id) { idx, mem in
+                        MemoryRow(memory: mem, channelNum: idx + 1, groupColor: t.accent, isActive: mem.id == store.activeMemoryId, isEditMode: isEditMode, onTap: {
+                            if isEditMode {
+                                editingMemory = mem
+                            } else {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                store.applyMemory(mem)
+                            }
+                        })
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                editingMemory = mem
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .tint(t.accent)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                store.deleteMemory(id: mem.id)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                        .contextMenu {
+                            Button {
+                                editingMemory = mem
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            Button(role: .destructive) {
+                                store.deleteMemory(id: mem.id)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
                         }
                     }
+                } header: {
+                    Text("\(group.name) · \(group.items.count)")
+                        .foregroundStyle(t.label2)
                 }
-                .padding(.bottom, 16)
             }
         }
-                .background(t.bg.ignoresSafeArea())
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(t.bg.ignoresSafeArea())
         .searchable(text: $searchText, prompt: "Name, group, or frequency")
         .toolbar {
             ToolbarItemGroup(placement: .topBarLeading) {
                 Button(isEditMode ? "Done" : "Edit") {
                     withAnimation { isEditMode.toggle() }
                 }
-                .font(isEditMode ? .system(size: 17, weight: .semibold) : .system(size: 17))
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { showAddMemory = true } label: {
@@ -99,43 +113,45 @@ struct MemoryRow: View {
     var memory: Memory
     var channelNum: Int
     var groupColor: Color
-    var isLast: Bool
     var isActive: Bool
     var isEditMode: Bool = false
     var onTap: () -> Void
 
+    @ScaledMetric(relativeTo: .caption2) private var badgeSize: CGFloat = 24
+    @ScaledMetric(relativeTo: .caption2) private var badgeWidth: CGFloat = 38
+
     var body: some View {
-        VStack(spacing: 0) {
+        Button(action: onTap) {
             HStack(spacing: 0) {
                 Group {
                     if isActive {
                         ZStack {
                             Circle()
                                 .fill(groupColor)
-                                .frame(width: 24, height: 24)
+                                .frame(width: badgeSize, height: badgeSize)
                             Text("\(channelNum)")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .font(.system(.caption2, design: .monospaced, weight: .bold))
                                 .tracking(0.3)
                                 .foregroundStyle(.white)
                         }
                     } else {
                         Text("CH\(channelNum)")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .font(.system(.caption2, design: .monospaced, weight: .bold))
                             .tracking(0.3)
                             .foregroundStyle(groupColor)
                     }
                 }
-                .frame(width: 38)
+                .frame(width: badgeWidth)
                 .padding(.trailing, 12)
 
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
                         Text(memory.name)
-                            .font(.system(size: 16.5, weight: .medium))
+                            .font(.body.weight(.medium))
                             .foregroundStyle(isActive ? groupColor : t.label)
                         if isActive {
                             Text("TUNED")
-                                .font(.system(size: 10.5, weight: .bold))
+                                .font(.caption2.weight(.bold))
                                 .tracking(0.4)
                                 .foregroundStyle(t.green)
                                 .padding(.horizontal, 7)
@@ -145,34 +161,27 @@ struct MemoryRow: View {
                         }
                     }
                     Text(memory.metaString)
-                        .font(.system(size: 13))
+                        .font(.footnote)
                         .foregroundStyle(t.label2)
                 }
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
 
                 Spacer(minLength: 8)
 
                 Text(memory.freqString)
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .font(.system(.subheadline, design: .monospaced, weight: .semibold))
                     .foregroundStyle(isActive ? groupColor : t.label2)
 
                 if isEditMode {
                     Image(systemName: "pencil.circle.fill")
-                        .font(.system(size: 18))
+                        .font(.body)
                         .foregroundStyle(t.accent)
                         .padding(.leading, 10)
                 }
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 46)
-            .background(isActive ? groupColor.opacity(0.08) : Color.clear)
-
-            if !isLast {
-                Divider()
-                    .padding(.leading, 56)
-            }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { onTap() }
+        .listRowBackground(t.surface.overlay(isActive ? groupColor.opacity(0.08) : .clear))
+        .listRowSeparatorTint(t.sep)
     }
 }
 
@@ -234,42 +243,67 @@ struct AddMemoryView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 4) {
-                    ListGroupView(header: "Identity") {
-                        FieldRow(label: "Name",  value: $name)
-                        FieldRow(label: "Group", value: $group, isLast: true)
-                    }
-
-                    ListGroupView(header: "Frequency") {
-                        FieldRow(label: "Frequency", value: $freqText, mono: true)
-                        FieldRow(label: "Offset",    value: $offsetText, mono: true)
-                        StepperRow(
-                            label: "Tone (PL)",
-                            valueText: toneValue == 0 ? "Off" : String(format: "%.1f Hz", toneValue),
-                            onDecrement: {
-                                if let idx = tones.firstIndex(of: toneValue), idx > 0 { toneValue = tones[idx - 1] }
-                            },
-                            onIncrement: {
-                                if let idx = tones.firstIndex(of: toneValue), idx < tones.count - 1 { toneValue = tones[idx + 1] }
-                            },
-                            isLast: true
-                        )
-                    }
-
-                    ListGroupView(header: "Transmit") {
-                        BandwidthPickerRow(bandwidth: $bandwidth)
-                    }
-
-                    ListGroupView(header: "Scan") {
-                        ListRow(
-                            title: "Include in Scan",
-                            isLast: true,
-                            accessory: KVToggle(isOn: $scanEnabled) as (any View)
-                        )
-                    }
+            Form {
+                Section {
+                    FieldRow(label: "Name",  value: $name)
+                    FieldRow(label: "Group", value: $group)
+                } header: {
+                    Text("Identity").foregroundStyle(t.label2)
                 }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+
+                Section {
+                    FieldRow(label: "Frequency", value: $freqText, mono: true)
+                    FieldRow(label: "Offset",    value: $offsetText, mono: true)
+                    Stepper(
+                        onIncrement: {
+                            if let idx = tones.firstIndex(of: toneValue), idx < tones.count - 1 { toneValue = tones[idx + 1] }
+                        },
+                        onDecrement: {
+                            if let idx = tones.firstIndex(of: toneValue), idx > 0 { toneValue = tones[idx - 1] }
+                        }
+                    ) {
+                        LabeledContent {
+                            Text(toneValue == 0 ? "Off" : String(format: "%.1f Hz", toneValue))
+                                .font(.system(.body, design: .monospaced, weight: .semibold))
+                                .foregroundStyle(t.label)
+                        } label: {
+                            Text("Tone (PL)").foregroundStyle(t.label)
+                        }
+                    }
+                } header: {
+                    Text("Frequency").foregroundStyle(t.label2)
+                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+
+                Section {
+                    Picker(selection: $bandwidth) {
+                        Text("Wide").tag(UInt8(0))
+                        Text("Narrow").tag(UInt8(1))
+                    } label: {
+                        Text("Bandwidth").foregroundStyle(t.label)
+                    }
+                    .tint(t.label2)
+                } header: {
+                    Text("Transmit").foregroundStyle(t.label2)
+                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+
+                Section {
+                    Toggle(isOn: $scanEnabled) {
+                        Text("Include in Scan").foregroundStyle(t.label)
+                    }
+                    .tint(t.green)
+                } header: {
+                    Text("Scan").foregroundStyle(t.label2)
+                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
             }
+            .scrollContentBackground(.hidden)
             .background(t.bg.ignoresSafeArea())
             .navigationTitle(editing == nil ? "New Memory" : "Edit Memory")
             .navigationBarTitleDisplayMode(.inline)
@@ -286,100 +320,20 @@ struct AddMemoryView: View {
     }
 }
 
-private struct BandwidthPickerRow: View {
-    @Environment(\.theme) var t
-    @Binding var bandwidth: UInt8
-
-    var body: some View {
-        HStack {
-            Text("Bandwidth")
-                .font(.system(size: 16.5))
-                .foregroundStyle(t.label)
-            Spacer()
-            Picker("Bandwidth", selection: $bandwidth) {
-                Text("Wide").tag(UInt8(0))
-                Text("Narrow").tag(UInt8(1))
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 160)
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 46)
-    }
-}
-
 private struct FieldRow: View {
     @Environment(\.theme) var t
     var label: String
     @Binding var value: String
     var mono: Bool = false
-    var isLast: Bool = false
-    var tint: Color? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 16.5))
-                    .foregroundStyle(t.label)
-                    .frame(width: 110, alignment: .leading)
-                Spacer()
-                TextField("", text: $value)
-                    .font(mono ? .system(size: 16.5, weight: .semibold, design: .monospaced) : .system(size: 16.5, weight: .semibold))
-                    .foregroundStyle(tint ?? t.label)
-                    .multilineTextAlignment(.trailing)
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 50)
-            if !isLast {
-                Divider().padding(.leading, 16).background(t.sep)
-            }
-        }
-    }
-}
-
-private struct StepperRow: View {
-    @Environment(\.theme) var t
-    var label: String
-    var valueText: String
-    var onDecrement: () -> Void
-    var onIncrement: () -> Void
-    var isLast: Bool = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 16.5))
-                    .foregroundStyle(t.label)
-                Spacer()
-                Text(valueText)
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(t.label)
-                    .padding(.trailing, 12)
-                HStack(spacing: 0) {
-                    Button(action: onDecrement) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(t.label)
-                            .frame(width: 40, height: 30)
-                    }
-                    Divider().frame(height: 30).background(t.sep)
-                    Button(action: onIncrement) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(t.label)
-                            .frame(width: 40, height: 30)
-                    }
-                }
-                .background(t.fill)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 50)
-            if !isLast {
-                Divider().padding(.leading, 16).background(t.sep)
-            }
+        LabeledContent {
+            TextField(label, text: $value, prompt: Text(""))
+                .font(mono ? .system(.body, design: .monospaced, weight: .semibold) : .body.weight(.semibold))
+                .foregroundStyle(t.label)
+                .multilineTextAlignment(.trailing)
+        } label: {
+            Text(label).foregroundStyle(t.label)
         }
     }
 }
