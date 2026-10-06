@@ -1,26 +1,10 @@
 import SwiftUI
-import MediaPlayer
-
-private struct PersistentVolumeViewHost: UIViewRepresentable {
-    let volumeView: MPVolumeView
-
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView()
-        container.clipsToBounds = true
-        volumeView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(volumeView)
-        return container
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {}
-}
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var systemColorScheme
     @State private var store = RadioStore()
     @State private var selectedTab: Tab = .voice
-    @State private var mpVolumeView = MPVolumeView(frame: .zero)
 
     enum Tab: String, CaseIterable {
         case voice, aprs, map, memories, more
@@ -79,7 +63,6 @@ struct ContentView: View {
             .tag(Tab.more)
         }
         .environment(\.theme, theme)
-        .environment(\.mpVolumeView, mpVolumeView)
         .preferredColorScheme(store.themeMode == .system ? nil : (theme.isDark ? .dark : .light))
         .tint(theme.accent)
         .onAppear { store.theme = theme }
@@ -103,12 +86,6 @@ struct ContentView: View {
             case .active:     store.enterForeground()
             default:          break
             }
-        }
-        .overlay(alignment: .topLeading) {
-            PersistentVolumeViewHost(volumeView: mpVolumeView)
-                .frame(width: 1, height: 1)
-                .opacity(0.001)
-                .allowsHitTesting(false)
         }
     }
 }

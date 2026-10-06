@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import Combine
+import AVKit
 import MediaPlayer
 import UIKit
 
@@ -32,7 +33,7 @@ struct VoiceView: View {
             .padding(.bottom, 2)
 
             switch store.voiceMode {
-            case .vfo:  VFOBody(store: store, layout: stageLayout, showCaptions: $showCaptions)
+            case .vfo:  VFOBody(store: store, layout: stageLayout)
             case .scan: ScanBody(store: store)
             }
 
@@ -46,6 +47,11 @@ struct VoiceView: View {
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showCaptions = true } label: {
+                    Label("Captions", systemImage: "captions.bubble")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showSettings = true } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -106,7 +112,7 @@ nonisolated enum StageLayout: Equatable {
 
     init(size: CGSize) {
         if size.width >= 700 { self = .wide }
-        else if size.height < 560 { self = .compact }
+        else if size.height < 650 { self = .compact }
         else { self = .regular }
     }
 }
@@ -117,7 +123,6 @@ private struct VFOBody: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
     var layout: StageLayout
-    @Binding var showCaptions: Bool
 
     var body: some View {
         // Memory match supplies only name/description; freq, offset, and
@@ -134,8 +139,7 @@ private struct VFOBody: View {
             tone:         store.currentToneString,
             modeLabel:    band + "VFO",
             freqEditable: true,
-            layout:       layout,
-            showCaptions: $showCaptions
+            layout:       layout
         )
     }
 }
@@ -154,7 +158,6 @@ private struct RadioStage: View {
     var modeLabel:    String
     var freqEditable: Bool = false
     var layout:       StageLayout = .regular
-    @Binding var showCaptions: Bool
     @State private var squelchDragging = false
 
     private var compact: Bool { layout == .compact }
@@ -234,7 +237,7 @@ private struct RadioStage: View {
                     .frame(maxWidth: .infinity)
                     VStack(spacing: 20) {
                         pttControl
-                        controls
+                        sliders
                     }
                     .frame(width: 320)
                 }
@@ -246,12 +249,12 @@ private struct RadioStage: View {
                     readout
                     infoPills
                         .padding(.horizontal, 20)
-                    HStack(spacing: 24) {
-                        pttControl
-                        controls
-                            .frame(maxWidth: .infinity)
-                    }
-                    .padding(.horizontal, 20)
+                    // Full width: the glass slider thumb is a fixed size and
+                    // swamps a track squeezed in beside the PTT button.
+                    sliders
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, compact ? 10 : 16)
+                    pttControl
                 }
             }
         }
@@ -415,11 +418,15 @@ private struct RadioStage: View {
         }
     }
 
-    // Volume, squelch, captions.
-    private var controls: some View {
-        VStack(spacing: 16) {
-            SystemVolumeSlider()
-            SliderRow(icon: "waveform", label: "\(store.squelch)") {
+    // System volume (with output picker) and squelch.
+    private var sliders: some View {
+        VStack(spacing: compact ? 8 : 12) {
+            SliderRow(icon: "speaker.wave.2.fill") {
+                SystemVolumeView(tint: UIColor(t.accent))
+            } trailing: {
+                RoutePicker(tint: UIColor(t.label2), activeTint: UIColor(t.accent))
+            }
+            SliderRow(icon: "waveform") {
                 // Drags send the level to the radio once, on release (per-tick
                 // writes made the thumb bounce); VoiceOver adjustments send it immediately.
                 Slider(
@@ -437,14 +444,12 @@ private struct RadioStage: View {
                 }
                 .accessibilityLabel("Squelch")
                 .accessibilityValue("\(store.squelch)")
+            } trailing: {
+                Text("\(store.squelch)")
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(t.label2)
+                    .accessibilityHidden(true)
             }
-            Button { showCaptions = true } label: {
-                Label("Captions", systemImage: "captions.bubble")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .controlSize(.large)
         }
     }
 }
@@ -665,76 +670,64 @@ struct PTTButton: View {
 
 // MARK: - Slider row
 
-// Icon, slider, and an optional fixed-width value label.
-private struct SliderRow<Content: View>: View {
+// Icon, slider, and a fixed-width trailing slot so the tracks line up.
+private struct SliderRow<Content: View, Trailing: View>: View {
     @Environment(\.theme) var t
     var icon: String
-    var label: String? = nil
     @ViewBuilder var slider: () -> Content
+    @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(t.label2)
-                .frame(width: 20)
+                .frame(width: 22)
                 .accessibilityHidden(true)
-            // Thumbless track (Music / Control Center style): the glass thumb
-            // dwarfs a track this short.
             slider()
                 .tint(t.accent)
-                .sliderThumbVisibility(.hidden)
-            // Slot reserved even when empty so both tracks end at the same x.
-            Text(label ?? "")
-                .font(.caption.weight(.semibold).monospacedDigit())
-                .foregroundStyle(t.label2)
-                .frame(width: 14, alignment: .trailing)
-                .accessibilityHidden(true)
+            trailing()
+                .frame(width: 28, height: 28)
         }
     }
 }
 
-// MARK: - System volume observer
+// MARK: - System volume
 
-private final class VolumeObserver: ObservableObject {
-    @Published var volume: Double = Double(AVAudioSession.sharedInstance().outputVolume)
-    private var observation: NSKeyValueObservation?
-    var isUserDragging = false
+// The system volume view: drives the real output volume and tracks hardware
+// buttons itself. Its built-in route button is hidden in favor of
+// RoutePicker, which sits in the row's trailing slot.
+private struct SystemVolumeView: UIViewRepresentable {
+    var tint: UIColor
 
-    init() {
-        observation = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { [weak self] _, change in
-            guard let self, let v = change.newValue, !self.isUserDragging else { return }
-            DispatchQueue.main.async { self.volume = Double(v) }
+    private final class SliderOnly: MPVolumeView {
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            for case let button as UIButton in subviews { button.isHidden = true }
         }
+    }
+
+    func makeUIView(context: Context) -> MPVolumeView { SliderOnly(frame: .zero) }
+
+    func updateUIView(_ view: MPVolumeView, context: Context) {
+        view.tintColor = tint
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: MPVolumeView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 200, height: 34)
     }
 }
 
-// MARK: - System volume slider
+// Audio output picker (speaker, Bluetooth, AirPlay).
+private struct RoutePicker: UIViewRepresentable {
+    var tint: UIColor
+    var activeTint: UIColor
 
-private struct SystemVolumeSlider: View {
-    @Environment(\.mpVolumeView) var mpVolumeView
-    @StateObject private var observer = VolumeObserver()
+    func makeUIView(context: Context) -> AVRoutePickerView { AVRoutePickerView() }
 
-    var body: some View {
-        SliderRow(icon: "speaker.wave.2.fill") {
-            // Write back only from user drags. KVO also fires when the audio
-            // session category flips for PTT (.playback ↔ .playAndRecord) and
-            // briefly reports the other route's volume — echoing that into
-            // MPVolumeView would actually set system volume (stuck-at-max bug).
-            Slider(
-                value: Binding(
-                    get: { observer.volume },
-                    set: { newVol in
-                        observer.volume = newVol
-                        mpVolumeView?.subviews.compactMap({ $0 as? UISlider }).first?.value = Float(newVol)
-                    }
-                ),
-                in: 0...1
-            ) { editing in
-                observer.isUserDragging = editing
-            }
-            .accessibilityLabel("Volume")
-        }
+    func updateUIView(_ view: AVRoutePickerView, context: Context) {
+        view.tintColor = tint
+        view.activeTintColor = activeTint
     }
 }
 

@@ -1,5 +1,4 @@
 import SwiftUI
-import MediaPlayer
 
 // MARK: - Device strip (hardware connection status)
 
@@ -176,18 +175,5 @@ struct InfoPill: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 13))
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 13))
-    }
-}
-
-// MARK: - Environment key: persistent MPVolumeView
-
-private struct MPVolumeViewKey: EnvironmentKey {
-    static let defaultValue: MPVolumeView? = nil
-}
-
-extension EnvironmentValues {
-    var mpVolumeView: MPVolumeView? {
-        get { self[MPVolumeViewKey.self] }
-        set { self[MPVolumeViewKey.self] = newValue }
     }
 }
