@@ -7,13 +7,20 @@ import Synchronization
 // while a transmission is being received (startSegment/endSegment), and
 // each transmission's results are routed to its own caption line by audio
 // time (CaptionTimeline). No per-request time limit, so no rolling restarts.
+// SpeechAnalyzer needs iOS 26; on older systems captions stay unavailable.
 @MainActor
 class SpeechManager {
     private var localeIdentifier = "en-US"
     // nil until checked; false when SpeechTranscriber can't do the language.
     private var localeSupported: Bool?
     private var sessionTask: Task<Void, Never>?
-    private var analyzer: SpeechAnalyzer?
+    // Holds the SpeechAnalyzer; untyped so this class loads before iOS 26.
+    private var analyzerStorage: AnyObject?
+    @available(iOS 26, *)
+    private var analyzer: SpeechAnalyzer? {
+        get { analyzerStorage as? SpeechAnalyzer }
+        set { analyzerStorage = newValue }
+    }
     // Session generation; results and failures from a stopped session are
     // ignored.
     private var sessionID = 0
@@ -72,15 +79,22 @@ class SpeechManager {
 
     var isSegmentActive: Bool { liveSegmentID != nil }
 
+    static var isOSSupported: Bool {
+        if #available(iOS 26, *) { return true }
+        return false
+    }
+
     // SpeechTranscriber only runs on-device; it's unavailable on hardware
     // without the neural engine support, or for unsupported languages.
     var supportsOnDeviceRecognition: Bool {
-        SpeechTranscriber.isAvailable && localeSupported != false
+        guard #available(iOS 26, *) else { return false }
+        return SpeechTranscriber.isAvailable && localeSupported != false
     }
 
     // Loads the model ahead of the first transmission. Idempotent.
     func startSession() {
-        guard sessionTask == nil, authorizationStatus == .authorized,
+        guard #available(iOS 26, *), sessionTask == nil,
+              authorizationStatus == .authorized,
               supportsOnDeviceRecognition else { return }
         sessionID += 1
         let id = sessionID
@@ -101,10 +115,10 @@ class SpeechManager {
             pendingFinalize = nil
             onSegmentFinalized?(pending.segmentID)
         }
-        if let analyzer {
+        if #available(iOS 26, *), let analyzer {
             Task { await analyzer.cancelAndFinishNow() }
         }
-        analyzer = nil
+        analyzerStorage = nil
     }
 
     func stopAll() {
@@ -137,13 +151,14 @@ class SpeechManager {
         liveSegmentID = nil
         let end = feed.stopRecording()
         timeline.end(at: end.seconds)
-        guard let analyzer else {
+        guard #available(iOS 26, *), let analyzer else {
             pendingFinalize = (end, segmentID)
             return
         }
         finalize(analyzer, through: end, segmentID: segmentID)
     }
 
+    @available(iOS 26, *)
     private func finalize(_ analyzer: SpeechAnalyzer, through time: CMTime, segmentID: Int) {
         Task { [weak self] in
             try? await analyzer.finalize(through: time)
@@ -151,6 +166,7 @@ class SpeechManager {
         }
     }
 
+    @available(iOS 26, *)
     private func runSession(id: Int, chunks: AsyncStream<AudioFeed.Chunk>) async {
         do {
             guard let locale = await SpeechTranscriber.supportedLocale(
@@ -333,6 +349,7 @@ nonisolated final class AudioFeed: Sendable {
 
     // Converts 16 kHz mono Float32 chunks to the analyzer's format. Used
     // from a single task only.
+    @available(iOS 26, *)
     final class Converter {
         private let source = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: AudioFeed.sampleRate,

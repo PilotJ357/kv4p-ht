@@ -162,11 +162,20 @@ struct SettingsView: View {
     private var captionsFooter: String {
         let onDevice = "On-device speech recognition. No data sent to the cloud. Saved transcripts stay on this device."
         switch store.captionsStatus {
-        case .denied, .restricted, .unavailable:
+        case .needsNewerOS, .denied, .restricted, .unavailable:
             return store.captionsStatus.message(language: store.captionLanguage) ?? onDevice
         case .off, .needsPermission, .listening:
             return onDevice
         }
+    }
+
+    // Shown off and locked before iOS 26; the stored preference is kept for
+    // after an OS update.
+    private var captionsToggle: any View {
+        guard store.captionsStatus == .needsNewerOS else {
+            return KVToggle(isOn: $store.liveCaptions)
+        }
+        return KVToggle(isOn: .constant(false)).disabled(true)
     }
 
     private func openAppSettings() {
@@ -249,7 +258,7 @@ struct SettingsView: View {
                     ) {
                         ListRow(title: "Live captions",
                                 isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.liveCaptions) as (any View))
+                                accessory: captionsToggle)
                         if store.captionsStatus.opensSettings {
                             Button(action: openAppSettings) {
                                 ListRow(title: "Open Settings", isLast: false, dense: true)

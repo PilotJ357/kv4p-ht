@@ -595,11 +595,12 @@ class RadioStore {
         transcriptLog.save()
     }
 
-    // Re-derives captionsStatus from the toggle, permission, and on-device
-    // support; starts or stops recognition to match. Call when any input
+    // Re-derives captionsStatus from the OS, toggle, permission, and
+    // on-device support; starts or stops recognition to match. Call when any input
     // may have changed (toggle, permission prompt, returning from Settings).
     func refreshCaptionsStatus() {
         let status = CaptionsStatus.resolve(
+            osSupported: SpeechManager.isOSSupported,
             enabled: liveCaptions,
             authorization: speechManager.authorizationStatus,
             supportsOnDevice: speechManager.supportsOnDeviceRecognition)
