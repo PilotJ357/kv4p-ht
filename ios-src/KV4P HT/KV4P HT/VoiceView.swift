@@ -397,14 +397,10 @@ private struct RadioStage: View {
             if micDenied && !txBlocked {
                 Button(action: openAppSettings) {
                     Label("Open Settings", systemImage: "gear")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(t.accent)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(t.fill)
-                        .clipShape(Capsule())
+                        .font(.footnote.weight(.semibold))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .controlSize(.small)
                 .accessibilityHint("Allow microphone access to transmit voice")
             }
         }
@@ -414,24 +410,27 @@ private struct RadioStage: View {
     private var controls: some View {
         VStack(spacing: 16) {
             SystemVolumeSlider()
-            VolumeSlider(
-                icon: "waveform",
-                pct: Binding(
-                    get: { Double(store.squelch) / 9.0 },
-                    set: { store.squelch = UInt8(round($0 * 9.0)) }
-                ),
-                label: "SQ \(store.squelch)",
-                editable: true,
-                onEnded: { pct in
-                    store.squelch = UInt8(round(pct * 9.0))
-                    store.radio.setSquelch(store.squelch)
+            SliderRow(icon: "waveform", label: "SQ \(store.squelch)") {
+                Slider(
+                    value: Binding(
+                        get: { Double(store.squelch) },
+                        set: { store.squelch = UInt8($0.rounded()) }
+                    ),
+                    in: 0...9, step: 1
+                ) { editing in
+                    // Firmware only hears the final value; per-tick writes made the thumb bounce.
+                    if !editing { store.radio.setSquelch(store.squelch) }
                 }
-            )
-            SmallAction(
-                systemImage: "captions.bubble",
-                label:       "Captions",
-                on:          showCaptions
-            ) { showCaptions = true }
+                .accessibilityLabel("Squelch")
+                .accessibilityValue("\(store.squelch)")
+            }
+            Button { showCaptions = true } label: {
+                Label("Captions", systemImage: "captions.bubble")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
         }
     }
 }
@@ -566,13 +565,12 @@ private struct OffsetToneSheet: View {
 
                 Button(action: apply) {
                     Text("APPLY")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.headline)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(t.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .tint(t.accent)
                 .padding(.horizontal, 28)
                 .padding(.bottom, 12)
             }
@@ -651,15 +649,14 @@ struct PTTButton: View {
     }
 }
 
-// MARK: - Volume slider row
+// MARK: - Slider row
 
-private struct VolumeSlider: View {
+// Icon, slider, and a fixed-width value label so the two sliders line up.
+private struct SliderRow<Content: View>: View {
     @Environment(\.theme) var t
     var icon: String
-    @Binding var pct: Double
     var label: String
-    var editable: Bool = false
-    var onEnded: ((Double) -> Void)?
+    @ViewBuilder var slider: () -> Content
 
     var body: some View {
         HStack(spacing: 11) {
@@ -667,31 +664,14 @@ private struct VolumeSlider: View {
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(t.label2)
                 .frame(width: 20)
-            GeometryReader { geo in
-                let bar = ZStack(alignment: .leading) {
-                    Capsule().fill(t.meterTrack).frame(height: 5)
-                    Capsule().fill(t.label2).frame(width: geo.size.width * pct, height: 5)
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 15, height: 15)
-                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                        .offset(x: geo.size.width * pct - 7.5, y: 0)
-                }
-                if editable {
-                    bar.gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { v in pct = max(0, min(1, v.location.x / geo.size.width)) }
-                            .onEnded { _ in onEnded?(pct) }
-                    )
-                } else {
-                    bar
-                }
-            }
-            .frame(height: 15)
+                .accessibilityHidden(true)
+            slider()
+                .tint(t.accent)
             Text(label)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .font(.caption.weight(.semibold).monospaced())
                 .foregroundStyle(t.label2)
                 .frame(width: 34, alignment: .trailing)
+                .accessibilityHidden(true)
         }
     }
 }
@@ -711,53 +691,31 @@ private final class VolumeObserver: ObservableObject {
     }
 }
 
-// MARK: - System volume slider (matches VolumeSlider design)
+// MARK: - System volume slider
 
 private struct SystemVolumeSlider: View {
-    @Environment(\.theme) var t
     @Environment(\.mpVolumeView) var mpVolumeView
     @StateObject private var observer = VolumeObserver()
 
     var body: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(t.label2)
-                .frame(width: 20)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(t.meterTrack).frame(height: 5)
-                    Capsule().fill(t.label2).frame(width: geo.size.width * observer.volume, height: 5)
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 15, height: 15)
-                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                        .offset(x: geo.size.width * observer.volume - 7.5, y: 0)
-                }
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { v in
-                            observer.isUserDragging = true
-                            observer.volume = max(0, min(1, Double(v.location.x / geo.size.width)))
-                        }
-                        .onEnded { _ in
-                            observer.isUserDragging = false
-                        }
-                )
+        SliderRow(icon: "speaker.wave.2.fill", label: "VOL") {
+            // Write back only from user drags. KVO also fires when the audio
+            // session category flips for PTT (.playback ↔ .playAndRecord) and
+            // briefly reports the other route's volume — echoing that into
+            // MPVolumeView would actually set system volume (stuck-at-max bug).
+            Slider(
+                value: Binding(
+                    get: { observer.volume },
+                    set: { newVol in
+                        observer.volume = newVol
+                        mpVolumeView?.subviews.compactMap({ $0 as? UISlider }).first?.value = Float(newVol)
+                    }
+                ),
+                in: 0...1
+            ) { editing in
+                observer.isUserDragging = editing
             }
-            .frame(height: 15)
-            Text("VOL")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(t.label2)
-                .frame(width: 34, alignment: .trailing)
-        }
-        // Write back only for user drags. KVO also fires when the audio
-        // session category flips for PTT (.playback ↔ .playAndRecord) and
-        // briefly reports the other route's volume — echoing that into
-        // MPVolumeView would actually set system volume (stuck-at-max bug).
-        .onChange(of: observer.volume) { _, newVol in
-            guard observer.isUserDragging else { return }
-            mpVolumeView?.subviews.compactMap({ $0 as? UISlider }).first?.value = Float(newVol)
+            .accessibilityLabel("Volume")
         }
     }
 }
@@ -862,13 +820,12 @@ private struct FreqNumpad: View {
                 // Set
                 Button(action: commit) {
                     Text("SET")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.headline)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(t.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .tint(t.accent)
                 .padding(.horizontal, 28)
                 .padding(.top, 16)
                 .padding(.bottom, 12)
@@ -1006,16 +963,25 @@ private struct ScanBody: View {
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(t.green)
                         }
-                        PillButton(label: "Stop scan", systemImage: "stop.fill", filled: false) {
-                            store.stopScan()
+                        Button { store.stopScan() } label: {
+                            Label("Stop scan", systemImage: "stop.fill")
+                                .font(.body.weight(.semibold))
+                                .frame(maxWidth: .infinity)
                         }
+                        .buttonStyle(.glass)
+                        .controlSize(.large)
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 14)
                 } else {
-                    PillButton(label: "Start scan", systemImage: "barcode.viewfinder", filled: true) {
-                        store.startScan()
+                    Button { store.startScan() } label: {
+                        Label("Start scan", systemImage: "barcode.viewfinder")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
+                    .tint(t.accent)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 14)
                 }

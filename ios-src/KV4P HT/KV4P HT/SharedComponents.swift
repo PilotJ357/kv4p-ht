@@ -270,60 +270,6 @@ struct TextFieldRow: View {
     }
 }
 
-// MARK: - Pill button
-
-struct PillButton: View {
-    @Environment(\.theme) var t
-    var label: String
-    var systemImage: String
-    var filled: Bool = false
-    var action: () -> Void = {}
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(filled ? .white : t.label)
-                Text(label)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(filled ? .white : t.label)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(filled ? t.accent : t.fill)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-    }
-}
-
-// MARK: - SmallAction button
-
-struct SmallAction: View {
-    @Environment(\.theme) var t
-    var systemImage: String
-    var label: String
-    var on: Bool = false
-    var action: () -> Void = {}
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(on ? t.accent : t.label2)
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(on ? t.accent : t.label2)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(on ? t.accentSoft : t.fill2)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-    }
-}
-
 // MARK: - RX/TX badge
 
 struct RxBadge: View {
