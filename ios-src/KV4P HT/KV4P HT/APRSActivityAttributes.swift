@@ -10,7 +10,7 @@
 import Foundation
 import ActivityKit
 
-struct APRSActivityAttributes: ActivityAttributes {
+nonisolated struct APRSActivityAttributes: ActivityAttributes {
     // Mutable per-update content shown on the Lock Screen / Dynamic Island.
     public struct ContentState: Codable, Hashable {
         var lastCallsign: String

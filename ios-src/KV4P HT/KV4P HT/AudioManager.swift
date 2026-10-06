@@ -126,14 +126,14 @@ actor AudioManager {
     private var engine:     AVAudioEngine
     private var sourceNode: AVAudioSourceNode
     private let pcmFormat:  AVAudioFormat
-    nonisolated(unsafe) private let ringBuffer: PCMRingBuffer
+    private let ringBuffer: PCMRingBuffer
     // RT-safe one-shot startup gate. Render thread is sole writer (sets true).
     // Actor methods reset to false before engine starts / after engine stops.
     private let started: UnsafeMutablePointer<Bool>
     // Phone-side RX playback gate. Silences audio while the firmware reports
     // squelch closed, or while the user has muted RX on the APRS frequency.
     // Set from RadioStore on each device-state update. Render thread is sole reader.
-    private let rxMuted: UnsafeMutablePointer<Bool>
+    nonisolated(unsafe) private let rxMuted: UnsafeMutablePointer<Bool>
     nonisolated(unsafe) private var playing = false
     // Set when a background engine restart fails ('!pla' etc.) — retried on
     // next foreground via recoverIfNeeded().
