@@ -155,6 +155,7 @@ private struct RadioStage: View {
     var freqEditable: Bool = false
     var layout:       StageLayout = .regular
     @Binding var showCaptions: Bool
+    @State private var squelchDragging = false
 
     private var compact: Bool { layout == .compact }
 
@@ -411,14 +412,19 @@ private struct RadioStage: View {
         VStack(spacing: 16) {
             SystemVolumeSlider()
             SliderRow(icon: "waveform", label: "SQ \(store.squelch)") {
+                // Drags send the level to the radio once, on release (per-tick
+                // writes made the thumb bounce); VoiceOver adjustments send it immediately.
                 Slider(
                     value: Binding(
                         get: { Double(store.squelch) },
-                        set: { store.squelch = UInt8($0.rounded()) }
+                        set: {
+                            store.squelch = UInt8($0.rounded())
+                            if !squelchDragging { store.radio.setSquelch(store.squelch) }
+                        }
                     ),
                     in: 0...9, step: 1
                 ) { editing in
-                    // Firmware only hears the final value; per-tick writes made the thumb bounce.
+                    squelchDragging = editing
                     if !editing { store.radio.setSquelch(store.squelch) }
                 }
                 .accessibilityLabel("Squelch")

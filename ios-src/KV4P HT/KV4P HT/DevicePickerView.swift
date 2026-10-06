@@ -45,6 +45,7 @@ struct DevicePickerView: View {
                         Text("Make sure your KV4P BLE radio is powered on and within range.")
                     } actions: {
                         Button("Scan for Radios") { ble.startScan() }
+                            .foregroundStyle(.white)
                             .buttonStyle(.glassProminent)
                             .controlSize(.large)
                             .tint(t.accent)

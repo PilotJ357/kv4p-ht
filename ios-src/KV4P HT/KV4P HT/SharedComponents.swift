@@ -1,11 +1,6 @@
 import SwiftUI
 import MediaPlayer
 
-// MARK: - Typography helpers
-
-let kvFont  = Font.system(size: 16, weight: .medium, design: .default)
-let kvMono  = Font.system(size: 14, weight: .medium, design: .monospaced)
-
 // MARK: - Device strip (hardware connection status)
 
 struct DeviceStrip: View {
@@ -110,101 +105,7 @@ struct SMeter: View {
     }
 }
 
-// MARK: - Grouped list components
-
-struct ListGroupView<Content: View>: View {
-    @Environment(\.theme) var t
-    var header: String? = nil
-    var footer: String? = nil
-    var inset: Bool = true
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let h = header {
-                Text(h.uppercased())
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(t.label2)
-                    .tracking(0.4)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 14)
-                    .padding(.bottom, 7)
-            }
-            VStack(spacing: 0) {
-                content()
-            }
-            .background(t.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, inset ? 16 : 0)
-            if let f = footer {
-                Text(f)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(t.label2)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 7)
-                    .lineSpacing(3)
-            }
-        }
-    }
-}
-
-struct ListRow: View {
-    @Environment(\.theme) var t
-    var title: String
-    var subtitle: String? = nil
-    var value: String? = nil
-    var valueColor: Color? = nil
-    var leading: (any View)? = nil
-    var showChevron: Bool = true
-    var showDivider: Bool = true
-    var isLast: Bool = false
-    var dense: Bool = false
-    var accessory: (any View)? = nil
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                if let l = leading {
-                    AnyView(l).padding(.trailing, 12)
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 16.5, weight: .medium))
-                        .foregroundStyle(t.label)
-                    if let sub = subtitle {
-                        Text(sub)
-                            .font(.system(size: 13))
-                            .foregroundStyle(t.label2)
-                    }
-                }
-                Spacer(minLength: 8)
-                if let v = value {
-                    Text(v)
-                        .font(.system(size: 16))
-                        .foregroundStyle(valueColor ?? t.label2)
-                        .padding(.trailing, showChevron ? 4 : 0)
-                }
-                if let a = accessory {
-                    AnyView(a)
-                } else if showChevron {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(t.label3)
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: dense ? 40 : 46)
-            if !isLast {
-                Divider()
-                    .background(t.sep)
-                    .padding(.leading, leading != nil ? 56 : 16)
-            }
-        }
-        // Transparent regions (spacer, text gaps) must hit-test so rows
-        // wrapped in plain-style Buttons are tappable across the full width.
-        .contentShape(Rectangle())
-    }
-}
+// MARK: - Settings icon tile
 
 struct IconTile: View {
     var color: Color
@@ -220,53 +121,6 @@ struct IconTile: View {
                     .font(.system(size: size * 0.44, weight: .semibold))
                     .foregroundStyle(.white)
             )
-    }
-}
-
-struct KVToggle: View {
-    @Environment(\.theme) var t
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle("", isOn: $isOn)
-            .labelsHidden()
-            .tint(t.green)
-    }
-}
-
-// MARK: - Text field row (settings)
-
-struct TextFieldRow: View {
-    @Environment(\.theme) var t
-    var title: String
-    @Binding var text: String
-    var placeholder: String = ""
-    var isLast: Bool = false
-    var autocap: TextInputAutocapitalization = .characters
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Text(title)
-                    .font(.system(size: 16.5, weight: .medium))
-                    .foregroundStyle(t.label)
-                Spacer(minLength: 8)
-                TextField(placeholder, text: $text)
-                    .multilineTextAlignment(.trailing)
-                    .font(.system(size: 16))
-                    .foregroundStyle(t.label2)
-                    .frame(maxWidth: 200)
-                    .textInputAutocapitalization(autocap)
-                    .autocorrectionDisabled()
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 46)
-            if !isLast {
-                Divider()
-                    .background(t.sep)
-                    .padding(.leading, 16)
-            }
-        }
     }
 }
 
