@@ -8,78 +8,64 @@ struct MoreView: View {
     @Bindable var store: RadioStore
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Radio rows
-                    ListGroupView {
-                        NavigationLink { DeviceInfoView(store: store) } label: {
-                            ListRow(
-                                title: "Device & firmware",
-                                value: store.ble.hello.map { "v\($0.firmwareVersion)" } ?? "–",
-                                leading: IconTile(color: t.accent, systemImage: "antenna.radiowaves.left.and.right") as (any View),
-                                isLast: false
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        NavigationLink { BeaconSettingsView(store: store) } label: {
-                            ListRow(
-                                title: "My position & beacon",
-                                value: store.aprsBeaconEnabled ? "On" : "Off",
-                                leading: IconTile(color: t.green, systemImage: "location.fill") as (any View),
-                                isLast: false
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        NavigationLink { TranscriptLogView(store: store) } label: {
-                            ListRow(
-                                title: "Transcript log",
-                                value: store.transcriptLog.entries.isEmpty ? nil : "\(store.transcriptLog.entries.count)",
-                                leading: IconTile(color: t.amber, systemImage: "captions.bubble.fill") as (any View),
-                                isLast: true
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    // Settings / Privacy rows
-                    ListGroupView {
-                        NavigationLink { SettingsView(store: store) } label: {
-                            ListRow(
-                                title: "Settings",
-                                leading: IconTile(color: Color(hex: "8E8E93"), systemImage: "gearshape.fill") as (any View),
-                                isLast: false
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        NavigationLink { PrivacyPolicyView() } label: {
-                            ListRow(
-                                title: "Privacy",
-                                leading: IconTile(color: t.green, systemImage: "hand.raised.fill") as (any View),
-                                isLast: false
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        NavigationLink { AboutView(store: store) } label: {
-                            ListRow(
-                                title: "About",
-                                leading: IconTile(color: t.accent, systemImage: "info.circle.fill") as (any View),
-                                isLast: true
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Text("Pocket HT · For KV4P BLE radios · GPLv3")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(t.label3)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 12)
-                        .padding(.bottom, 16)
+        Form {
+            // Radio rows
+            Section {
+                NavigationLink { DeviceInfoView(store: store) } label: {
+                    SettingsValueRow(
+                        title: "Device & firmware",
+                        value: store.ble.hello.map { "v\($0.firmwareVersion)" } ?? "–",
+                        icon: IconTile(color: t.accent, systemImage: "antenna.radiowaves.left.and.right")
+                    )
+                }
+                NavigationLink { BeaconSettingsView(store: store) } label: {
+                    SettingsValueRow(
+                        title: "My position & beacon",
+                        value: store.aprsBeaconEnabled ? "On" : "Off",
+                        icon: IconTile(color: t.green, systemImage: "location.fill")
+                    )
+                }
+                NavigationLink { TranscriptLogView(store: store) } label: {
+                    SettingsValueRow(
+                        title: "Transcript log",
+                        value: store.transcriptLog.entries.isEmpty ? nil : "\(store.transcriptLog.entries.count)",
+                        icon: IconTile(color: t.amber, systemImage: "captions.bubble.fill")
+                    )
                 }
             }
+            .settingsRowStyle(t)
+
+            // Settings / Privacy rows
+            Section {
+                NavigationLink { SettingsView(store: store) } label: {
+                    SettingsValueRow(
+                        title: "Settings",
+                        icon: IconTile(color: Color(hex: "8E8E93"), systemImage: "gearshape.fill")
+                    )
+                }
+                NavigationLink { PrivacyPolicyView() } label: {
+                    SettingsValueRow(
+                        title: "Privacy",
+                        icon: IconTile(color: t.green, systemImage: "hand.raised.fill")
+                    )
+                }
+                NavigationLink { AboutView(store: store) } label: {
+                    SettingsValueRow(
+                        title: "About",
+                        icon: IconTile(color: t.accent, systemImage: "info.circle.fill")
+                    )
+                }
+            } footer: {
+                Text("Pocket HT · For KV4P BLE radios · GPLv3")
+                    .foregroundStyle(t.label3)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 12)
+            }
+            .settingsRowStyle(t)
         }
-                .background(t.bg.ignoresSafeArea())
+        .scrollContentBackground(.hidden)
+        .background(t.bg.ignoresSafeArea())
         .navigationTitle("More")
         .navigationBarTitleDisplayMode(.large)
     }
@@ -114,146 +100,135 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 4) {
-                    // APRS
-                    ListGroupView(header: "APRS") {
-                        TextFieldRow(title: "Callsign",  text: $store.callsign,  placeholder: "N0CALL", isLast: false)
-                        TextFieldRow(title: "APRS SSID", text: $store.aprsSSID,  placeholder: "Optional", isLast: false, autocap: .never)
-                        PickerRow(title: "APRS frequency",
-                                  selection: $store.aprsBeaconFrequency,
-                                  options: aprsFrequencies,
-                                  labels: aprsFrequencyLabels,
-                                  isLast: false)
-                        HStack(spacing: 0) {
-                            ListRow(title: "Silence audio on APRS freq", isLast: true, dense: true,
-                                    accessory: KVToggle(isOn: $store.silenceRxOnAprsFreq) as (any View))
-                            Button { showAprsSquelchInfo = true } label: {
-                                Image(systemName: "info.circle")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(t.accent)
-                            }
-                            .padding(.trailing, 16)
-                            .popover(isPresented: $showAprsSquelchInfo) {
-                                Text("APRS packets are decoded regardless of squelch. Enable this to mute RX audio while tuned to your APRS frequency so you don't hear packet noise.")
-                                    .font(.system(size: 14))
-                                    .padding()
-                                    .frame(width: 280)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .presentationCompactAdaptation(.popover)
-                            }
-                        }
+        Form {
+            // APRS
+            Section {
+                SettingsTextField(title: "Callsign",  text: $store.callsign, placeholder: "N0CALL")
+                SettingsTextField(title: "APRS SSID", text: $store.aprsSSID, placeholder: "Optional", autocap: .never)
+                PickerRow(title: "APRS frequency",
+                          selection: $store.aprsBeaconFrequency,
+                          options: aprsFrequencies,
+                          labels: aprsFrequencyLabels)
+                HStack {
+                    SettingsToggle(title: "Silence audio on APRS freq", isOn: $store.silenceRxOnAprsFreq)
+                    Button { showAprsSquelchInfo = true } label: {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(t.accent)
                     }
-
-                    // Notifications
-                    ListGroupView(header: "Notifications") {
-                        NavigationLink {
-                            APRSNotificationsView(store: store)
-                        } label: {
-                            ListRow(title: "APRS notifications",
-                                    value: store.aprsNotify.enabled ? "On" : "Off",
-                                    isLast: true)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    // Radio
-                    ListGroupView(header: "Radio") {
-                        SquelchSliderRow(store: store)
-                        Divider().padding(.leading, 16).background(t.sep)
-                        TXPowerRow(store: store)
-                        Divider().padding(.leading, 16).background(t.sep)
-                        ListRow(title: "Band",
-                                value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–",
-                                showChevron: false, isLast: false)
-                        TxTimeoutRow(store: store)
-                    }
-
-                    // Audio filters
-                    ListGroupView(
-                        header: "Audio filters",
-                        footer: "Controlled by firmware."
-                    ) {
-                        ListRow(title: "High-pass", isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.filterHighPass) as (any View))
-                        ListRow(title: "Low-pass",  isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.filterLowPass) as (any View))
-                        BandwidthRow(store: store)
-                    }
-
-                    // Transcription
-                    ListGroupView(
-                        header: "Transcription",
-                        footer: captionsFooter
-                    ) {
-                        ListRow(title: "Live captions",
-                                isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.liveCaptions) as (any View))
-                        if store.captionsStatus.opensSettings {
-                            Button(action: openAppSettings) {
-                                ListRow(title: "Open Settings", isLast: false, dense: true)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        ListRow(title: "Save transcripts", isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.saveTranscripts) as (any View))
-                        NavigationLink {
-                            TranscriptLogView(store: store)
-                        } label: {
-                            ListRow(title: "Transcript log",
-                                    value: "\(store.transcriptLog.entries.count)",
-                                    isLast: true, dense: true)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    // Turning captions on asks for speech permission (in
-                    // RadioStore); if it can't work, say why right away.
-                    .onChange(of: store.liveCaptions) { _, enabled in
-                        guard enabled else { return }
-                        switch store.captionsStatus {
-                        case .denied, .restricted, .unavailable:
-                            captionsAlert = store.captionsStatus
-                        default:
-                            break
-                        }
-                    }
-                    .alert("Captions unavailable",
-                           isPresented: Binding(get: { captionsAlert != nil },
-                                                set: { if !$0 { captionsAlert = nil } }),
-                           presenting: captionsAlert) { status in
-                        if status.opensSettings {
-                            Button("Open Settings", action: openAppSettings)
-                            Button("Not Now", role: .cancel) {}
-                        } else {
-                            Button("OK", role: .cancel) {}
-                        }
-                    } message: { status in
-                        Text(status.message(language: store.captionLanguage) ?? "")
-                    }
-
-                    // Appearance
-                    ListGroupView(header: "Appearance") {
-                        VStack(spacing: 0) {
-                            Divider().opacity(0)
-                            Picker("Appearance", selection: $store.themeMode) {
-                                ForEach(AppThemeMode.allCases) { mode in
-                                    Text(mode.label).tag(mode)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                            Divider().padding(.leading, 16).background(t.sep)
-                        }
-                        ListRow(title: "Sticky PTT",     isLast: true, dense: true,
-                                accessory: KVToggle(isOn: $store.stickyPTT) as (any View))
+                    .buttonStyle(.borderless)
+                    .popover(isPresented: $showAprsSquelchInfo) {
+                        Text("APRS packets are decoded regardless of squelch. Enable this to mute RX audio while tuned to your APRS frequency so you don't hear packet noise.")
+                            .font(.subheadline)
+                            .padding()
+                            .frame(width: 280)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .presentationCompactAdaptation(.popover)
                     }
                 }
-                .padding(.bottom, 32)
+            } header: {
+                Text("APRS").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            // Notifications
+            Section {
+                NavigationLink {
+                    APRSNotificationsView(store: store)
+                } label: {
+                    SettingsValueRow(title: "APRS notifications",
+                                     value: store.aprsNotify.enabled ? "On" : "Off")
+                }
+            } header: {
+                Text("Notifications").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            // Radio
+            Section {
+                SquelchSliderRow(store: store)
+                TXPowerRow(store: store)
+                SettingsValueRow(title: "Band",
+                                 value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–")
+                TxTimeoutRow(store: store)
+            } header: {
+                Text("Radio").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            // Audio filters
+            Section {
+                SettingsToggle(title: "High-pass", isOn: $store.filterHighPass)
+                SettingsToggle(title: "Low-pass",  isOn: $store.filterLowPass)
+                BandwidthRow(store: store)
+            } header: {
+                Text("Audio filters").foregroundStyle(t.label2)
+            } footer: {
+                Text("Controlled by firmware.").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            // Transcription
+            Section {
+                SettingsToggle(title: "Live captions", isOn: $store.liveCaptions)
+                if store.captionsStatus.opensSettings {
+                    Button("Open Settings", action: openAppSettings)
+                        .foregroundStyle(t.accent)
+                }
+                SettingsToggle(title: "Save transcripts", isOn: $store.saveTranscripts)
+                NavigationLink {
+                    TranscriptLogView(store: store)
+                } label: {
+                    SettingsValueRow(title: "Transcript log",
+                                     value: "\(store.transcriptLog.entries.count)")
+                }
+            } header: {
+                Text("Transcription").foregroundStyle(t.label2)
+            } footer: {
+                Text(captionsFooter).foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            // Appearance
+            Section {
+                Picker("Appearance", selection: $store.themeMode) {
+                    ForEach(AppThemeMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                SettingsToggle(title: "Sticky PTT", isOn: $store.stickyPTT)
+            } header: {
+                Text("Appearance").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+        }
+        .scrollContentBackground(.hidden)
+        .background(t.bg.ignoresSafeArea())
+        // Turning captions on asks for speech permission (in
+        // RadioStore); if it can't work, say why right away.
+        .onChange(of: store.liveCaptions) { _, enabled in
+            guard enabled else { return }
+            switch store.captionsStatus {
+            case .denied, .restricted, .unavailable:
+                captionsAlert = store.captionsStatus
+            default:
+                break
             }
         }
-                .background(t.bg.ignoresSafeArea())
+        .alert("Captions unavailable",
+               isPresented: Binding(get: { captionsAlert != nil },
+                                    set: { if !$0 { captionsAlert = nil } }),
+               presenting: captionsAlert) { status in
+            if status.opensSettings {
+                Button("Open Settings", action: openAppSettings)
+                Button("Not Now", role: .cancel) {}
+            } else {
+                Button("OK", role: .cancel) {}
+            }
+        } message: { status in
+            Text(status.message(language: store.captionLanguage) ?? "")
+        }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
@@ -276,22 +251,20 @@ private struct TXPowerRow: View {
     private let options = ["Low", "High"]
 
     var body: some View {
-        HStack {
-            Text("TX power")
-                .font(.system(size: 16.5, weight: .medium))
-                .foregroundStyle(t.label)
-            Spacer()
+        LabeledContent {
             Picker("TX power", selection: $store.txPower) {
                 ForEach(options, id: \.self) { opt in
                     Text(opt).tag(opt)
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .frame(maxWidth: 140)
             .disabled(!store.radio.hasHighLowPowerSwitch)
+        } label: {
+            Text("TX power")
+                .foregroundStyle(t.label)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 46)
     }
 }
 
@@ -302,23 +275,18 @@ private struct TxTimeoutRow: View {
     @Bindable var store: RadioStore
 
     var body: some View {
-        HStack {
-            Text("TX time-out")
-                .font(.system(size: 16.5, weight: .medium))
-                .foregroundStyle(t.label)
-            Spacer()
-            Menu {
-                Picker("TX time-out", selection: $store.txTimeoutSeconds) {
-                    ForEach(TxTimeout.options, id: \.self) { secs in
-                        Text(TxTimeout.label(secs)).tag(secs)
-                    }
-                }
-            } label: {
-                MenuValueLabel(text: TxTimeout.label(store.txTimeoutSeconds))
+        Picker(selection: $store.txTimeoutSeconds) {
+            ForEach(TxTimeout.options, id: \.self) { secs in
+                Text(TxTimeout.label(secs)).tag(secs)
             }
+        } label: {
+            Text("TX time-out")
+                .foregroundStyle(t.label)
+        } currentValueLabel: {
+            Text(TxTimeout.label(store.txTimeoutSeconds))
+                .foregroundStyle(t.label2)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 46)
+        .pickerStyle(.menu)
     }
 }
 
@@ -336,20 +304,18 @@ private struct BandwidthRow: View {
     }
 
     var body: some View {
-        HStack {
-            Text("Bandwidth")
-                .font(.system(size: 16.5, weight: .medium))
-                .foregroundStyle(t.label)
-            Spacer()
+        LabeledContent {
             Picker("Bandwidth", selection: bwBinding) {
                 Text("Wide").tag("Wide")
                 Text("Narrow").tag("Narrow")
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .frame(maxWidth: 160)
+        } label: {
+            Text("Bandwidth")
+                .foregroundStyle(t.label)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 46)
     }
 }
 
@@ -358,45 +324,37 @@ private struct BandwidthRow: View {
 private struct SquelchSliderRow: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
+    @State private var isDragging = false
 
-    private var squelchPct: Double { Double(store.squelch) / 9.0 }
+    // Drags send the level to the radio once, on release; other changes
+    // (VoiceOver adjustments) send it immediately.
+    private var level: Binding<Double> {
+        Binding(
+            get: { Double(store.squelch) },
+            set: {
+                store.squelch = UInt8($0.rounded())
+                if !isDragging { store.radio.setSquelch(store.squelch) }
+            })
+    }
 
     var body: some View {
         VStack(spacing: 10) {
             HStack {
                 Text("Squelch")
-                    .font(.system(size: 16.5))
                     .foregroundStyle(t.label)
                 Spacer()
                 Text("Level \(store.squelch)")
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
                     .foregroundStyle(t.label2)
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(t.meterTrack).frame(height: 5)
-                    Capsule().fill(t.accent).frame(width: geo.size.width * squelchPct, height: 5)
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 19, height: 19)
-                        .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
-                        .offset(x: geo.size.width * squelchPct - 9.5)
-                }
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { v in
-                            let pct = max(0, min(1, v.location.x / geo.size.width))
-                            store.squelch = UInt8(round(pct * 9.0))
-                        }
-                        .onEnded { _ in
-                            store.radio.setSquelch(store.squelch)
-                        }
-                )
-            }
-            .frame(height: 19)
+            Slider(value: level, in: 0...9, step: 1, onEditingChanged: { editing in
+                isDragging = editing
+                if !editing { store.radio.setSquelch(store.squelch) }
+            })
+            .tint(t.accent)
+            .accessibilityLabel("Squelch")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.vertical, 6)
     }
 }
 
@@ -407,31 +365,25 @@ struct DeviceInfoView: View {
     @Bindable var store: RadioStore
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 4) {
-                    if let hello = store.ble.hello {
-                        ListGroupView(header: "Hello Frame") {
-                            DeviceDetailRow(label: "Firmware", value: "v\(hello.firmwareVersion)", isLast: false)
-                            DeviceDetailRow(label: "Radio Module", value: hello.radioModuleFound ? "Found" : "Not found", isLast: false)
-                            DeviceDetailRow(label: "RF Module", value: hello.rfModuleType == 0 ? "VHF" : "UHF", isLast: false)
-                            DeviceDetailRow(label: "Freq Range", value: "\(String(format: "%.1f", hello.minFreq))–\(String(format: "%.1f", hello.maxFreq)) MHz", isLast: false)
-                            DeviceDetailRow(label: "Features", value: "0x\(String(hello.features, radix: 16))", isLast: true)
-                        }
-                    } else {
-                        ListGroupView(header: "Hello Frame") {
-                            Text("No device connected")
-                                .font(.system(size: 15))
-                                .foregroundStyle(t.label2)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 11)
-                        }
-                    }
+        Form {
+            Section {
+                if let hello = store.ble.hello {
+                    DeviceDetailRow(label: "Firmware", value: "v\(hello.firmwareVersion)")
+                    DeviceDetailRow(label: "Radio Module", value: hello.radioModuleFound ? "Found" : "Not found")
+                    DeviceDetailRow(label: "RF Module", value: hello.rfModuleType == 0 ? "VHF" : "UHF")
+                    DeviceDetailRow(label: "Freq Range", value: "\(String(format: "%.1f", hello.minFreq))–\(String(format: "%.1f", hello.maxFreq)) MHz")
+                    DeviceDetailRow(label: "Features", value: "0x\(String(hello.features, radix: 16))")
+                } else {
+                    Text("No device connected")
+                        .foregroundStyle(t.label2)
                 }
-                .padding(.bottom, 32)
+            } header: {
+                Text("Hello Frame").foregroundStyle(t.label2)
             }
+            .settingsRowStyle(t)
         }
-                .background(t.bg.ignoresSafeArea())
+        .scrollContentBackground(.hidden)
+        .background(t.bg.ignoresSafeArea())
         .navigationTitle("Device & Firmware")
         .navigationBarTitleDisplayMode(.large)
         .environment(\.theme, store.theme)
@@ -460,88 +412,87 @@ struct BeaconSettingsView: View {
     private let intervals = [5, 10, 15, 30, 60]
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 4) {
-                    ListGroupView(
-                        header: "Position beacon",
-                        footer: "Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected and the app is open. Scheduled beacons pause while the app is in the background, and a beacon is skipped rather than sent with a location fix older than \(Int(APRSController.beaconFixMaxAge / 60)) minutes. Requires a callsign and APRS frequency configured in Settings.\n\nWith Interrupt reception off, a scheduled beacon that comes due while a signal is being received waits, re-checking every \(Int(BeaconDeferGate.retryInterval)) s until the channel is quiet. Beacon now always sends immediately."
-                    ) {
-                        ListRow(title: "Beacon position", isLast: false,
-                                accessory: KVToggle(isOn: beaconEnabledBinding) as (any View))
-                        PickerRow(title: "Interval",
-                                  selection: Binding(
-                                      get: { "\(store.aprsBeaconIntervalMin) min" },
-                                      set: { store.aprsBeaconIntervalMin = Int($0.dropLast(4)) ?? 15 }),
-                                  options: intervals.map { "\($0) min" },
-                                  isLast: false)
-                        ListRow(title: "Interrupt reception", isLast: false,
-                                accessory: KVToggle(isOn: $store.aprsBeaconInterruptRx) as (any View))
-                        ListRow(title: "Approximate position", isLast: true,
-                                accessory: KVToggle(isOn: $store.aprsPositionApprox) as (any View))
-                    }
+        Form {
+            Section {
+                SettingsToggle(title: "Beacon position", isOn: beaconEnabledBinding)
+                PickerRow(title: "Interval",
+                          selection: Binding(
+                              get: { "\(store.aprsBeaconIntervalMin) min" },
+                              set: { store.aprsBeaconIntervalMin = Int($0.dropLast(4)) ?? 15 }),
+                          options: intervals.map { "\($0) min" })
+                SettingsToggle(title: "Interrupt reception", isOn: $store.aprsBeaconInterruptRx)
+                SettingsToggle(title: "Approximate position", isOn: $store.aprsPositionApprox)
+            } header: {
+                Text("Position beacon").foregroundStyle(t.label2)
+            } footer: {
+                Text("Off by default. When on, publicly broadcasts your callsign and GPS position over APRS at the chosen interval while the radio is connected and the app is open. Scheduled beacons pause while the app is in the background, and a beacon is skipped rather than sent with a location fix older than \(Int(APRSController.beaconFixMaxAge / 60)) minutes. Requires a callsign and APRS frequency configured in Settings.\n\nWith Interrupt reception off, a scheduled beacon that comes due while a signal is being received waits, re-checking every \(Int(BeaconDeferGate.retryInterval)) s until the channel is quiet. Beacon now always sends immediately.")
+                    .foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
 
-                    if store.locationManager.access.isUnavailable {
-                        LocationUnavailableNotice(
-                            access: store.locationManager.access,
-                            consequence: "Position beacons can't be sent until it's available.")
-                    }
+            if store.locationManager.access.isUnavailable {
+                LocationUnavailableNotice(
+                    access: store.locationManager.access,
+                    consequence: "Position beacons can't be sent until it's available.")
+            }
 
-                    ListGroupView(header: "Map symbol") {
-                        PickerRow(title: "Symbol",
-                                  selection: Binding(
-                                      get: {
-                                          Self.symbols.first { $0.code == store.aprsSymbol }?.label
-                                              ?? Self.symbols[0].label
-                                      },
-                                      set: { label in
-                                          store.aprsSymbol = Self.symbols.first { $0.label == label }?.code ?? "["
-                                      }),
-                                  options: Self.symbols.map(\.label),
-                                  isLast: true)
-                    }
+            Section {
+                PickerRow(title: "Symbol",
+                          selection: Binding(
+                              get: {
+                                  Self.symbols.first { $0.code == store.aprsSymbol }?.label
+                                      ?? Self.symbols[0].label
+                              },
+                              set: { label in
+                                  store.aprsSymbol = Self.symbols.first { $0.label == label }?.code ?? "["
+                              }),
+                          options: Self.symbols.map(\.label))
+            } header: {
+                Text("Map symbol").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
 
-                    Button {
-                        if store.aprsBeaconConsented {
-                            sendBeaconNow()
-                        } else {
-                            consentAction = .beaconNow
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                            Text("Beacon now")
-                        }
-                        .font(.system(size: 16, weight: .semibold))
+            Section {
+                Button {
+                    if store.aprsBeaconConsented {
+                        sendBeaconNow()
+                    } else {
+                        consentAction = .beaconNow
+                    }
+                } label: {
+                    Label("Beacon now", systemImage: "dot.radiowaves.left.and.right")
+                        .fontWeight(.semibold)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .background(t.green)
-                        .clipShape(RoundedRectangle(cornerRadius: 13))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 20)
+                }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .tint(t.green)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            } footer: {
+                if let status = beaconStatus {
+                    Text(status)
+                        .foregroundStyle(t.label2)
+                        .frame(maxWidth: .infinity)
+                }
+            }
 
-                    if let status = beaconStatus {
-                        Text(status)
-                            .font(.system(size: 13))
-                            .foregroundStyle(t.label2)
-                            .padding(.top, 4)
-                    }
-
-                    if store.aprsBeaconConsented {
-                        Button("Stop sharing my position") {
-                            store.aprsBeaconConsented = false
-                            beaconStatus = nil
-                        }
-                        .font(.system(size: 15))
-                        .foregroundStyle(t.red)
-                        .padding(.top, 16)
+            if store.aprsBeaconConsented {
+                Section {
+                    Button(role: .destructive) {
+                        store.aprsBeaconConsented = false
+                        beaconStatus = nil
+                    } label: {
+                        Text("Stop sharing my position")
+                            .foregroundStyle(t.red)
+                            .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(.bottom, 32)
+                .settingsRowStyle(t)
             }
         }
+        .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Position & Beacon")
         .navigationBarTitleDisplayMode(.large)
@@ -607,26 +558,84 @@ private struct LocationUnavailableNotice: View {
     var consequence: String
 
     var body: some View {
-        ListGroupView(header: "Location") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "location.slash")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(t.amber)
-                    Text("\(access.explanation ?? "") \(consequence)")
-                        .font(.system(size: 15))
-                        .foregroundStyle(t.label)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(t.accent)
+        Section {
+            Label {
+                Text("\(access.explanation ?? "") \(consequence)")
+                    .foregroundStyle(t.label)
+            } icon: {
+                Image(systemName: "location.slash")
+                    .foregroundStyle(t.amber)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }
+            .foregroundStyle(t.accent)
+        } header: {
+            Text("Location").foregroundStyle(t.label2)
+        }
+        .settingsRowStyle(t)
+    }
+}
+
+private struct SettingsToggle: View {
+    @Environment(\.theme) var t
+    var title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            Text(title)
+                .foregroundStyle(t.label)
+        }
+        .tint(t.green)
+    }
+}
+
+private struct SettingsValueRow: View {
+    @Environment(\.theme) var t
+    var title: String
+    var value: String? = nil
+    var icon: IconTile? = nil
+
+    var body: some View {
+        LabeledContent {
+            if let value {
+                Text(value)
+                    .foregroundStyle(t.label2)
+            }
+        } label: {
+            if let icon {
+                Label {
+                    Text(title)
+                        .foregroundStyle(t.label)
+                } icon: {
+                    icon
+                }
+            } else {
+                Text(title)
+                    .foregroundStyle(t.label)
+            }
+        }
+    }
+}
+
+private struct SettingsTextField: View {
+    @Environment(\.theme) var t
+    var title: String
+    @Binding var text: String
+    var placeholder: String
+    var autocap: TextInputAutocapitalization = .characters
+
+    var body: some View {
+        LabeledContent {
+            TextField(title, text: $text, prompt: Text(placeholder).foregroundStyle(t.label3))
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(t.label2)
+                .textInputAutocapitalization(autocap)
+                .autocorrectionDisabled()
+        } label: {
+            Text(title)
+                .foregroundStyle(t.label)
         }
     }
 }
@@ -637,51 +646,21 @@ private struct PickerRow: View {
     @Binding var selection: String
     var options: [String]
     var labels: [String]? = nil
-    var isLast: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 16.5, weight: .medium))
-                    .foregroundStyle(t.label)
-                Spacer()
-                Menu {
-                    Picker(title, selection: $selection) {
-                        ForEach(Array(options.enumerated()), id: \.element) { i, opt in
-                            Text(labels?[i] ?? opt).tag(opt)
-                        }
-                    }
-                } label: {
-                    MenuValueLabel(text: options.firstIndex(of: selection)
-                        .map { labels?[$0] ?? options[$0] } ?? selection)
-                }
+        Picker(selection: $selection) {
+            ForEach(Array(options.enumerated()), id: \.element) { i, opt in
+                Text(labels?[i] ?? opt).tag(opt)
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 46)
-            if !isLast {
-                Divider().padding(.leading, 16).background(t.sep)
-            }
+        } label: {
+            Text(title)
+                .foregroundStyle(t.label)
+        } currentValueLabel: {
+            Text(options.firstIndex(of: selection)
+                .map { labels?[$0] ?? options[$0] } ?? selection)
+                .foregroundStyle(t.label2)
         }
-    }
-}
-
-// Value + up/down chevron for a Menu-backed picker row. Used instead of a
-// .menu Picker, which pads its trailing edge and leaves the value inset
-// from the other rows' values.
-private struct MenuValueLabel: View {
-    @Environment(\.theme) var t
-    var text: String
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text(text)
-                .font(.system(size: 16))
-                .multilineTextAlignment(.trailing)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(t.label2)
+        .pickerStyle(.menu)
     }
 }
 
@@ -689,25 +668,23 @@ private struct DeviceDetailRow: View {
     @Environment(\.theme) var t
     var label: String
     var value: String
-    var isLast: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 15.5))
-                    .foregroundStyle(t.label)
-                Spacer()
-                Text(value)
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(t.label2)
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 46)
-            if !isLast {
-                Divider().padding(.leading, 16).background(t.sep)
-            }
+        LabeledContent {
+            Text(value)
+                .font(.system(.body, design: .monospaced, weight: .semibold))
+                .foregroundStyle(t.label2)
+        } label: {
+            Text(label)
+                .foregroundStyle(t.label)
         }
+    }
+}
+
+private extension View {
+    func settingsRowStyle(_ t: AppTheme) -> some View {
+        listRowBackground(t.surface)
+            .listRowSeparatorTint(t.sep)
     }
 }
 
@@ -729,77 +706,80 @@ struct APRSNotificationsView: View {
     private static let cooldownOptions = ["1 min", "5 min", "10 min", "15 min"]
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 4) {
-                    ListGroupView(
-                        footer: authDenied
-                            ? "Notifications are turned off for Pocket HT. Enable them in iOS Settings › Notifications."
-                            : "Packets arrive while the app runs in the background (connected via Bluetooth)."
-                    ) {
-                        ListRow(title: "Notify on APRS packets", isLast: !authDenied, dense: true,
-                                accessory: KVToggle(isOn: enabledBinding) as (any View))
-                        if authDenied {
-                            Button(action: openNotificationSettings) {
-                                ListRow(title: "Open iOS Settings", isLast: true, dense: true)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    ListGroupView(header: "Packet types") {
-                        ForEach(Array(Self.kinds.enumerated()), id: \.element) { i, kind in
-                            ListRow(title: kind.label, isLast: i == Self.kinds.count - 1, dense: true,
-                                    accessory: KVToggle(isOn: kindBinding(kind)) as (any View))
-                        }
-                    }
-                    .disabled(!store.aprsNotify.enabled)
-                    .opacity(store.aprsNotify.enabled ? 1 : 0.4)
-
-                    ListGroupView(
-                        header: "Filters",
-                        footer: "Floods are tamed: repeated beacons from the same station are suppressed for the cooldown. Messages addressed to you always notify."
-                    ) {
-                        ListRow(title: "Only messages addressed to me", isLast: false, dense: true,
-                                accessory: KVToggle(isOn: $store.aprsNotify.onlyMessagesToMe) as (any View))
-                        PickerRow(title: "Within distance",
-                                  selection: distanceBinding,
-                                  options: Self.distanceOptions, isLast: false)
-                        PickerRow(title: "Beacon cooldown",
-                                  selection: cooldownBinding,
-                                  options: Self.cooldownOptions, isLast: true)
-                    }
-                    .disabled(!store.aprsNotify.enabled)
-                    .opacity(store.aprsNotify.enabled ? 1 : 0.4)
-
-                    if store.aprsNotify.distanceFilterMi != nil && store.locationManager.access.isUnavailable {
-                        LocationUnavailableNotice(
-                            access: store.locationManager.access,
-                            consequence: "Without your location the distance filter can't apply, so stations at any distance notify.")
-                    }
-
-                    ListGroupView(
-                        header: "Live activity",
-                        footer: "Shows live monitoring status (last station heard + packet count) on the Lock Screen and Dynamic Island while connected."
-                    ) {
-                        ListRow(title: "Show live activity", isLast: true, dense: true,
-                                accessory: KVToggle(isOn: $store.aprsNotify.liveActivityEnabled) as (any View))
-                    }
-
-                    if !store.aprsNotify.mutedCallsigns.isEmpty {
-                        ListGroupView(header: "Muted stations") {
-                            let muted = store.aprsNotify.mutedCallsigns.sorted()
-                            ForEach(Array(muted.enumerated()), id: \.element) { i, call in
-                                ListRow(title: call, value: "Unmute",
-                                        showChevron: false, isLast: i == muted.count - 1, dense: true)
-                                    .onTapGesture { store.aprsNotify.mutedCallsigns.remove(call) }
-                            }
-                        }
-                    }
+        Form {
+            Section {
+                SettingsToggle(title: "Notify on APRS packets", isOn: enabledBinding)
+                if authDenied {
+                    Button("Open iOS Settings", action: openNotificationSettings)
+                        .foregroundStyle(t.accent)
                 }
-                .padding(.top, 8)
+            } footer: {
+                Text(authDenied
+                     ? "Notifications are turned off for Pocket HT. Enable them in iOS Settings › Notifications."
+                     : "Packets arrive while the app runs in the background (connected via Bluetooth).")
+                    .foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            Section {
+                ForEach(Self.kinds, id: \.self) { kind in
+                    SettingsToggle(title: kind.label, isOn: kindBinding(kind))
+                }
+            } header: {
+                Text("Packet types").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+            .disabled(!store.aprsNotify.enabled)
+            .opacity(store.aprsNotify.enabled ? 1 : 0.4)
+
+            Section {
+                SettingsToggle(title: "Only messages addressed to me", isOn: $store.aprsNotify.onlyMessagesToMe)
+                PickerRow(title: "Within distance",
+                          selection: distanceBinding,
+                          options: Self.distanceOptions)
+                PickerRow(title: "Beacon cooldown",
+                          selection: cooldownBinding,
+                          options: Self.cooldownOptions)
+            } header: {
+                Text("Filters").foregroundStyle(t.label2)
+            } footer: {
+                Text("Floods are tamed: repeated beacons from the same station are suppressed for the cooldown. Messages addressed to you always notify.")
+                    .foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+            .disabled(!store.aprsNotify.enabled)
+            .opacity(store.aprsNotify.enabled ? 1 : 0.4)
+
+            if store.aprsNotify.distanceFilterMi != nil && store.locationManager.access.isUnavailable {
+                LocationUnavailableNotice(
+                    access: store.locationManager.access,
+                    consequence: "Without your location the distance filter can't apply, so stations at any distance notify.")
+            }
+
+            Section {
+                SettingsToggle(title: "Show live activity", isOn: $store.aprsNotify.liveActivityEnabled)
+            } header: {
+                Text("Live activity").foregroundStyle(t.label2)
+            } footer: {
+                Text("Shows live monitoring status (last station heard + packet count) on the Lock Screen and Dynamic Island while connected.")
+                    .foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            if !store.aprsNotify.mutedCallsigns.isEmpty {
+                Section {
+                    ForEach(store.aprsNotify.mutedCallsigns.sorted(), id: \.self) { call in
+                        Button { store.aprsNotify.mutedCallsigns.remove(call) } label: {
+                            SettingsValueRow(title: call, value: "Unmute")
+                        }
+                    }
+                } header: {
+                    Text("Muted stations").foregroundStyle(t.label2)
+                }
+                .settingsRowStyle(t)
             }
         }
+        .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
