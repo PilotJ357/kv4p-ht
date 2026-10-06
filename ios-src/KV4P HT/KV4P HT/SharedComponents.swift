@@ -38,8 +38,8 @@ struct DeviceStrip: View {
         }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(t.fill2)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 12))
             .padding(.horizontal, 20)
             .padding(.bottom, 10)
         }
@@ -153,6 +153,7 @@ struct RxBadge: View {
 }
 
 // MARK: - Info pill (offset / tone / power)
+// Tappable glass tile; callers wrap it in a Button or Menu.
 
 struct InfoPill: View {
     @Environment(\.theme) var t
@@ -173,8 +174,8 @@ struct InfoPill: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(t.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .contentShape(RoundedRectangle(cornerRadius: 13))
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 13))
     }
 }
 

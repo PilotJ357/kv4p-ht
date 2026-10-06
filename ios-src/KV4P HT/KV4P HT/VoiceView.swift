@@ -356,7 +356,15 @@ private struct RadioStage: View {
                 InfoPill(key: "Tone", value: tone)
             }
             .buttonStyle(.plain)
-            InfoPill(key: "Power", value: store.txPower)
+            Menu {
+                Picker("TX power", selection: $store.txPower) {
+                    ForEach(["Low", "High"], id: \.self) { Text($0).tag($0) }
+                }
+            } label: {
+                InfoPill(key: "Power", value: store.txPower)
+            }
+            .buttonStyle(.plain)
+            .disabled(!store.radio.hasHighLowPowerSwitch)
         }
         .padding(.top, 10)
         .padding(.bottom, compact ? 10 : 14)
