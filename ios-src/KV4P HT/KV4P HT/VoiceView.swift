@@ -694,6 +694,18 @@ private struct SliderRow<Content: View, Trailing: View>: View {
 
 // MARK: - System volume
 
+#if targetEnvironment(simulator)
+// The simulator has no system volume, so MPVolumeView draws nothing there.
+// Stand-in slider keeps the layout reviewable; it changes no audio.
+private struct SystemVolumeView: View {
+    var tint: UIColor
+    @State private var level = 0.5
+
+    var body: some View {
+        Slider(value: $level).accessibilityLabel("Volume")
+    }
+}
+#else
 // The system volume view: drives the real output volume and tracks hardware
 // buttons itself. Its built-in route button is hidden in favor of
 // RoutePicker, which sits in the row's trailing slot.
@@ -704,6 +716,9 @@ private struct SystemVolumeView: UIViewRepresentable {
         override func layoutSubviews() {
             super.layoutSubviews()
             for case let button as UIButton in subviews { button.isHidden = true }
+            // MPVolumeView pins its slider to the top edge; center it so the
+            // track lines up with the row's icons.
+            for case let slider as UISlider in subviews { slider.center.y = bounds.midY }
         }
     }
 
@@ -717,6 +732,7 @@ private struct SystemVolumeView: UIViewRepresentable {
         CGSize(width: proposal.width ?? 200, height: 34)
     }
 }
+#endif
 
 // Audio output picker (speaker, Bluetooth, AirPlay).
 private struct RoutePicker: UIViewRepresentable {
