@@ -345,7 +345,7 @@ struct APRSDetailView: View {
                                 .fontWeight(.semibold)
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glassProminent)
+                        .glassProminentButtonStyle()
                         .controlSize(.large)
                         .tint(t.accent)
                         .listRowBackground(Color.clear)
@@ -361,7 +361,7 @@ struct APRSDetailView: View {
                                 .fontWeight(.semibold)
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glassProminent)
+                        .glassProminentButtonStyle()
                         .controlSize(.large)
                         .tint(live.isUndelivered ? t.red : t.accent)
                         .listRowBackground(Color.clear)

@@ -411,7 +411,7 @@ private struct RadioStage: View {
                     Label("Open Settings", systemImage: "gear")
                         .font(.footnote.weight(.semibold))
                 }
-                .buttonStyle(.glass)
+                .glassButtonStyle()
                 .controlSize(.small)
                 .accessibilityHint("Allow microphone access to transmit voice")
             }
@@ -587,7 +587,7 @@ private struct OffsetToneSheet: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .glassProminentButtonStyle()
                 .controlSize(.large)
                 .tint(t.accent)
                 .padding(.horizontal, 28)
@@ -851,7 +851,7 @@ private struct FreqNumpad: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .glassProminentButtonStyle()
                 .controlSize(.large)
                 .tint(t.accent)
                 .padding(.horizontal, 28)
@@ -996,7 +996,7 @@ private struct ScanBody: View {
                                 .font(.body.weight(.semibold))
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.glass)
+                        .glassButtonStyle()
                         .controlSize(.large)
                     }
                     .padding(.horizontal, 20)
@@ -1007,7 +1007,7 @@ private struct ScanBody: View {
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .glassProminentButtonStyle()
                     .controlSize(.large)
                     .tint(t.accent)
                     .padding(.horizontal, 20)
@@ -1152,7 +1152,7 @@ struct CaptionsSheet: View {
                 }
             case .denied:
                 statusButton("Open Settings") { openURL(CaptionsStatus.appSettingsURL) }
-            case .restricted, .unavailable, .listening:
+            case .needsNewerOS, .restricted, .unavailable, .listening:
                 EmptyView()
             }
         }

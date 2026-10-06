@@ -46,7 +46,7 @@ struct DevicePickerView: View {
                     } actions: {
                         Button("Scan for Radios") { ble.startScan() }
                             .foregroundStyle(.white)
-                            .buttonStyle(.glassProminent)
+                            .glassProminentButtonStyle()
                             .controlSize(.large)
                             .tint(t.accent)
                     }
@@ -116,7 +116,7 @@ struct DevicePickerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button(role: .close) {
+                CloseButton {
                     ble.stopScan()
                     dismiss()
                 }

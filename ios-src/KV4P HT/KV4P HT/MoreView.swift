@@ -88,11 +88,17 @@ struct SettingsView: View {
     private var captionsFooter: String {
         let onDevice = "On-device speech recognition. No data sent to the cloud. Saved transcripts stay on this device."
         switch store.captionsStatus {
-        case .denied, .restricted, .unavailable:
+        case .needsNewerOS, .denied, .restricted, .unavailable:
             return store.captionsStatus.message(language: store.captionLanguage) ?? onDevice
         case .off, .needsPermission, .listening:
             return onDevice
         }
+    }
+
+    // Shown off and locked before iOS 26; the stored preference is kept for
+    // after an OS update.
+    private var captionsBinding: Binding<Bool> {
+        store.captionsStatus == .needsNewerOS ? .constant(false) : $store.liveCaptions
     }
 
     private func openAppSettings() {
@@ -169,7 +175,8 @@ struct SettingsView: View {
 
             // Transcription
             Section {
-                SettingsToggle(title: "Live captions", isOn: $store.liveCaptions)
+                SettingsToggle(title: "Live captions", isOn: captionsBinding)
+                    .disabled(store.captionsStatus == .needsNewerOS)
                 if store.captionsStatus.opensSettings {
                     Button("Open Settings", action: openAppSettings)
                         .foregroundStyle(t.accent)
@@ -234,7 +241,7 @@ struct SettingsView: View {
         .toolbar {
             if showsClose {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(role: .close) { dismiss() }
+                    CloseButton { dismiss() }
                 }
             }
         }
@@ -465,7 +472,7 @@ struct BeaconSettingsView: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .glassProminentButtonStyle()
                 .controlSize(.large)
                 .tint(t.green)
                 .listRowBackground(Color.clear)

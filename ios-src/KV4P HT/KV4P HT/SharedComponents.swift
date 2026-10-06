@@ -38,7 +38,7 @@ struct DeviceStrip: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .contentShape(RoundedRectangle(cornerRadius: 12))
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 12))
+            .glassTile(cornerRadius: 12, interactive: true, fallback: t.fill2)
             .padding(.horizontal, 20)
             .padding(.bottom, 10)
         }
@@ -174,6 +174,43 @@ struct InfoPill: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 13))
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 13))
+        .glassTile(cornerRadius: 13, interactive: true, fallback: t.fill2)
+    }
+}
+
+// MARK: - Liquid Glass with pre-iOS 26 fallbacks
+
+extension View {
+    /// `.glass` on iOS 26; `.bordered` before.
+    @ViewBuilder func glassButtonStyle() -> some View {
+        if #available(iOS 26, *) { buttonStyle(.glass) } else { buttonStyle(.bordered) }
+    }
+
+    /// `.glassProminent` on iOS 26; `.borderedProminent` before.
+    @ViewBuilder func glassProminentButtonStyle() -> some View {
+        if #available(iOS 26, *) { buttonStyle(.glassProminent) } else { buttonStyle(.borderedProminent) }
+    }
+
+    /// Glass behind a tile on iOS 26; a plain fill in the same shape before.
+    @ViewBuilder func glassTile<S: ShapeStyle>(cornerRadius: CGFloat, interactive: Bool = false,
+                                               fallback: S) -> some View {
+        if #available(iOS 26, *) {
+            glassEffect(interactive ? .regular.interactive() : .regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            background(fallback, in: .rect(cornerRadius: cornerRadius))
+        }
+    }
+}
+
+/// The system close (X) button on iOS 26; a "Close" text button before.
+struct CloseButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        if #available(iOS 26, *) {
+            Button(role: .close, action: action)
+        } else {
+            Button("Close", action: action)
+        }
     }
 }

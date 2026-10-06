@@ -123,7 +123,7 @@ struct APRSMapView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .glassEffect(in: .rect(cornerRadius: 13))
+                    .glassTile(cornerRadius: 13, fallback: .regularMaterial)
                     .padding(.bottom, 24)
                 }
             }
