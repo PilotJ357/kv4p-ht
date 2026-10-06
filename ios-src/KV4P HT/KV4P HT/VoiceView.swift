@@ -419,7 +419,7 @@ private struct RadioStage: View {
     private var controls: some View {
         VStack(spacing: 16) {
             SystemVolumeSlider()
-            SliderRow(icon: "waveform", label: "SQ \(store.squelch)") {
+            SliderRow(icon: "waveform", label: "\(store.squelch)") {
                 // Drags send the level to the radio once, on release (per-tick
                 // writes made the thumb bounce); VoiceOver adjustments send it immediately.
                 Slider(
@@ -665,11 +665,11 @@ struct PTTButton: View {
 
 // MARK: - Slider row
 
-// Icon, slider, and a fixed-width value label so the two sliders line up.
+// Icon, slider, and an optional fixed-width value label.
 private struct SliderRow<Content: View>: View {
     @Environment(\.theme) var t
     var icon: String
-    var label: String
+    var label: String? = nil
     @ViewBuilder var slider: () -> Content
 
     var body: some View {
@@ -679,12 +679,16 @@ private struct SliderRow<Content: View>: View {
                 .foregroundStyle(t.label2)
                 .frame(width: 20)
                 .accessibilityHidden(true)
+            // Thumbless track (Music / Control Center style): the glass thumb
+            // dwarfs a track this short.
             slider()
                 .tint(t.accent)
-            Text(label)
-                .font(.caption.weight(.semibold).monospaced())
+                .sliderThumbVisibility(.hidden)
+            // Slot reserved even when empty so both tracks end at the same x.
+            Text(label ?? "")
+                .font(.caption.weight(.semibold).monospacedDigit())
                 .foregroundStyle(t.label2)
-                .frame(width: 34, alignment: .trailing)
+                .frame(width: 14, alignment: .trailing)
                 .accessibilityHidden(true)
         }
     }
@@ -712,7 +716,7 @@ private struct SystemVolumeSlider: View {
     @StateObject private var observer = VolumeObserver()
 
     var body: some View {
-        SliderRow(icon: "speaker.wave.2.fill", label: "VOL") {
+        SliderRow(icon: "speaker.wave.2.fill") {
             // Write back only from user drags. KVO also fires when the audio
             // session category flips for PTT (.playback ↔ .playAndRecord) and
             // briefly reports the other route's volume — echoing that into
