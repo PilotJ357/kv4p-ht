@@ -285,7 +285,7 @@ private struct RadioStage: View {
             FreqNumpad(store: store, currentFreq: freq)
                 .environment(\.theme, store.theme)
                 .preferredColorScheme(store.theme.isDark ? .dark : .light)
-                .presentationDetents([.height(420)])
+                .presentationDetents([.height(470)])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showOffsetTone) {
@@ -833,6 +833,7 @@ private struct FreqNumpad: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(rangeError == nil ? t.label2 : t.red)
                 }
+                .padding(.top, 28)
                 .padding(.bottom, 28)
 
                 // Numpad
