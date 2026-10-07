@@ -274,6 +274,11 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         withLock { firmwareInfo?.maxFreq ?? 999.0 }
     }
 
+    /// Whether the module can tune `freq` (HELLO range). True before HELLO.
+    func isTunable(_ freq: Float) -> Bool {
+        withLock { firmwareInfo.map { freq >= $0.minFreq && freq <= $0.maxFreq } ?? true }
+    }
+
     var hasHighLowPowerSwitch: Bool {
         withLock { firmwareInfo.map { ($0.features & 0x01) != 0 } ?? false }
     }
@@ -376,6 +381,11 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         }
     }
 
+    private func isConfigTunable(_ state: HostDesiredState) -> Bool {
+        (state.flags & HOST_STATE_RADIO_CONFIG_VALID) == 0
+            || (isTunable(state.freqTx) && isTunable(state.freqRx))
+    }
+
     private func canTransmit(onFrequency freq: Float, bandwidth: UInt8) -> Bool {
         guard let firmwareInfo else { return false }
         return BandPlan.canTransmit(onFrequency: freq, bandwidth: bandwidth,
@@ -406,6 +416,14 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     private func sendDesiredStateIfChanged() {
         guard updateDepth == 0, let send, transportReady else { return }
         guard _desiredState != lastDesiredStateSent else { return }
+        // Firmware retries a failed SA818 group command forever, and the
+        // module rejects out-of-range frequencies, so one would hang the
+        // radio. Drop the whole change (a partial one could pair a new RX
+        // with a stale TX frequency).
+        guard isConfigTunable(_desiredState) else {
+            if let lastDesiredStateSent { _desiredState = lastDesiredStateSent }
+            return
+        }
         let appliedSequence = lastDeviceState?.appliedSequence ?? _desiredState.sequence
         _desiredState.sequence = max(_desiredState.sequence, appliedSequence) &+ 1
         lastDesiredStateSent = _desiredState

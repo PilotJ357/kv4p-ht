@@ -343,6 +343,41 @@ struct RadioModuleControllerTests {
         #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
     }
 
+    // Firmware retries a rejected SA818 group command forever, so an
+    // out-of-range tune must never reach it (e.g. a 2 m memory on UHF).
+    @Test func outOfRangeTuneIsNeverSent() {
+        let seed = makeDeviceState(freqTx: 446.0, freqRx: 446.0)
+        let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 1)
+        let before = sent.frames.count
+        #expect(!controller.isTunable(146.52))
+        #expect(controller.isTunable(446.0))
+
+        controller.beginUpdate()
+        controller.setTxFrequency(144.39)
+        controller.setRxFrequency(144.39)
+        controller.endUpdate()
+        #expect(sent.frames.count == before)
+        #expect(controller.desiredState.freqRx == 446.0)
+        #expect(controller.desiredState.freqTx == 446.0)
+
+        // Half in range (TX pushed past the edge by an offset): also dropped.
+        controller.beginUpdate()
+        controller.setRxFrequency(479.9)
+        controller.setTxFrequency(484.9)
+        controller.endUpdate()
+        #expect(sent.frames.count == before)
+        #expect(controller.desiredState.freqRx == 446.0)
+
+        controller.setRxFrequency(440.0)
+        #expect(sent.frames.count == before + 1)
+        #expect(sent.frames.last?.freqRx == 440.0)
+    }
+
+    @Test func everythingTunableBeforeHello() {
+        #expect(RadioModuleController().isTunable(146.52))
+        #expect(RadioModuleController().isTunable(446.0))
+    }
+
     @Test func adoptedDeviceStateRederivesTxAllowed() {
         let (controller, sent) = makeReadyController(rfModuleType: 0)
         let count = sent.frames.count

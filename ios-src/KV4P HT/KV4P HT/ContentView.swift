@@ -117,6 +117,13 @@ struct ContentView: View {
             default:          break
             }
         }
+        .alert("Can't tune", isPresented: Binding(
+            get: { store.tuneNotice != nil },
+            set: { if !$0 { store.tuneNotice = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(store.tuneNotice ?? "")
+        }
         .overlay(alignment: .topLeading) {
             PersistentVolumeViewHost(volumeView: mpVolumeView)
                 .frame(width: 1, height: 1)
