@@ -716,9 +716,15 @@ private struct SystemVolumeView: UIViewRepresentable {
         override func layoutSubviews() {
             super.layoutSubviews()
             for case let button as UIButton in subviews { button.isHidden = true }
-            // MPVolumeView pins its slider to the top edge; center it so the
-            // track lines up with the row's icons.
-            for case let slider as UISlider in subviews { slider.center.y = bounds.midY }
+        }
+
+        // MPVolumeView pins its slider to the top edge, and re-lays it out on
+        // route changes without a layoutSubviews pass, so center it through
+        // the slider-rect hook it consults on every layout.
+        override func volumeSliderRect(forBounds bounds: CGRect) -> CGRect {
+            var rect = super.volumeSliderRect(forBounds: bounds)
+            rect.origin.y = (bounds.height - rect.height) / 2
+            return rect
         }
     }
 

@@ -78,7 +78,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @Bindable var store: RadioStore
     var showsClose = false  // presented as a sheet (Voice tab) rather than pushed
-    @State private var showAprsSquelchInfo = false
     @State private var captionsAlert: CaptionsStatus? = nil
     @Environment(\.openURL) private var openURL
 
@@ -115,24 +114,12 @@ struct SettingsView: View {
                           selection: $store.aprsBeaconFrequency,
                           options: aprsFrequencies,
                           labels: aprsFrequencyLabels)
-                HStack {
-                    SettingsToggle(title: "Silence audio on APRS freq", isOn: $store.silenceRxOnAprsFreq)
-                    Button { showAprsSquelchInfo = true } label: {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(t.accent)
-                    }
-                    .buttonStyle(.borderless)
-                    .popover(isPresented: $showAprsSquelchInfo) {
-                        Text("APRS packets are decoded regardless of squelch. Enable this to mute RX audio while tuned to your APRS frequency so you don't hear packet noise.")
-                            .font(.subheadline)
-                            .padding()
-                            .frame(width: 280)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .presentationCompactAdaptation(.popover)
-                    }
-                }
+                SettingsToggle(title: "Silence audio on APRS freq", isOn: $store.silenceRxOnAprsFreq)
             } header: {
                 Text("APRS").foregroundStyle(t.label2)
+            } footer: {
+                Text("APRS packets are decoded regardless of squelch. Silencing mutes RX audio while tuned to your APRS frequency so you don't hear packet noise.")
+                    .foregroundStyle(t.label2)
             }
             .settingsRowStyle(t)
 
