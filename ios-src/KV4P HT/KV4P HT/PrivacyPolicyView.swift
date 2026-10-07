@@ -58,15 +58,16 @@ struct PrivacyPolicyView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(Self.effectiveDate)
-                    .font(.system(size: 13))
+                    .font(.footnote)
                     .foregroundStyle(t.label2)
                 ForEach(Self.sections, id: \.0) { heading, body in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(heading)
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.headline)
                             .foregroundStyle(t.label)
+                            .accessibilityAddTraits(.isHeader)
                         Text(LocalizedStringKey(body))
-                            .font(.system(size: 15))
+                            .font(.subheadline)
                             .foregroundStyle(t.label)
                             .tint(t.accent)
                             .fixedSize(horizontal: false, vertical: true)

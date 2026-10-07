@@ -169,7 +169,7 @@ private struct LicenseTextView: View {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(Self.paragraphs.enumerated()), id: \.offset) { _, p in
                     Text(p)
-                        .font(.system(size: 14))
+                        .font(.subheadline)
                         .foregroundStyle(t.label)
                         .fixedSize(horizontal: false, vertical: true)
                 }
