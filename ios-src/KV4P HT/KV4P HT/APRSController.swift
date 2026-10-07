@@ -392,7 +392,7 @@ class APRSController {
             case let .message(target, _, msgNum, _, _):
                 guard e.kind == .message || e.kind == .bulletin,
                       callsignsMatch(e.toCallsign, target),
-                      msgNum.map { msgNumsMatch(e.msgNum, $0) } ?? (e.msgNum == nil)
+                      msgNum.map({ msgNumsMatch(e.msgNum, $0) }) ?? (e.msgNum == nil)
                 else { continue }
             case .position:
                 guard e.kind == .position else { continue }
