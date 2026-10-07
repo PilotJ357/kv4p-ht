@@ -74,6 +74,9 @@ struct APRSView: View {
                 }
             }
         }
+        // Large title like More; the search field sits under it and scrolls away with it.
+        .navigationTitle("APRS")
+        .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, prompt: "Callsign or message text")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {

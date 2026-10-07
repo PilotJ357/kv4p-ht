@@ -78,6 +78,9 @@ struct MemoriesView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
+        // Large title like More; the search field sits under it and scrolls away with it.
+        .navigationTitle("Memories")
+        .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, prompt: "Name, group, or frequency")
         .toolbar {
             ToolbarItemGroup(placement: .topBarLeading) {
