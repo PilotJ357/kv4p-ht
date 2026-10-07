@@ -8,6 +8,7 @@ struct APRSView: View {
     @State private var selectedEntry: APRSEntry? = nil
     @State private var searchText = ""
     @State private var composeTarget: ComposeTarget?
+    @State private var sendAlertReason: String?
 
     private let filters = ["All", "Messages", "Bulletins", "Positions", "Weather"]
 
@@ -36,9 +37,29 @@ struct APRSView: View {
         }
     }
 
-    private var canSend: Bool {
-        store.ble.bleState == .ready &&
-        !store.callsign.trimmingCharacters(in: .whitespaces).isEmpty
+    // Why compose can't open right now, or nil when it can. The toolbar button
+    // stays tappable and shows this instead of silently greying out.
+    private var cannotSendReason: String? {
+        let connected = store.ble.bleState == .ready
+        let hasCallsign = !store.callsign.trimmingCharacters(in: .whitespaces).isEmpty
+        switch (connected, hasCallsign) {
+        case (true, true):   return nil
+        case (false, true):  return "Connect a radio to send APRS messages."
+        case (true, false):  return "Set your callsign in Settings to send APRS messages."
+        case (false, false): return "Connect a radio and set your callsign in Settings to send APRS messages."
+        }
+    }
+
+    // Empty-state copy: distinguish "nothing heard" from "nothing matches".
+    private var emptyState: (title: String, icon: String, detail: String) {
+        if !searchText.isEmpty {
+            return ("No Results", "magnifyingglass", "No packets match \u{201C}\(searchText)\u{201D}.")
+        }
+        if store.aprsFilter != "All" && !store.aprs.entries.isEmpty {
+            return ("No \(store.aprsFilter.lowercased()) yet", "line.3.horizontal.decrease.circle",
+                    "Choose All in the filter menu to see every packet.")
+        }
+        return ("No APRS packets yet", "antenna.radiowaves.left.and.right", tuneHint)
     }
 
     var body: some View {
@@ -60,16 +81,17 @@ struct APRSView: View {
         .background(t.bg.ignoresSafeArea())
         .overlay {
             if entries.isEmpty {
+                let empty = emptyState
                 ContentUnavailableView {
                     Label {
-                        Text("No APRS packets yet")
+                        Text(empty.title)
                             .foregroundStyle(t.label2)
                     } icon: {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Image(systemName: empty.icon)
                             .foregroundStyle(t.label3)
                     }
                 } description: {
-                    Text(tuneHint)
+                    Text(empty.detail)
                         .foregroundStyle(t.label3)
                 }
             }
@@ -92,12 +114,23 @@ struct APRSView: View {
                           : "line.3.horizontal.decrease.circle.fill")
                 }
                 Button {
-                    composeTarget = ComposeTarget(callsign: "")
+                    if let reason = cannotSendReason {
+                        sendAlertReason = reason
+                    } else {
+                        composeTarget = ComposeTarget(callsign: "")
+                    }
                 } label: {
                     Label("New Message", systemImage: "square.and.pencil")
                 }
-                .disabled(!canSend)
             }
+        }
+        .alert("Can\u{2019}t Send", isPresented: Binding(
+            get: { sendAlertReason != nil },
+            set: { if !$0 { sendAlertReason = nil } }
+        ), presenting: sendAlertReason) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { reason in
+            Text(reason)
         }
         .sheet(item: $selectedEntry) { entry in
             NavigationStack {
@@ -117,7 +150,8 @@ struct APRSView: View {
             }
             .environment(\.theme, store.theme)
             .preferredColorScheme(store.theme.isDark ? .dark : .light)
-            .presentationDetents([.medium])
+            // .large too so the form isn't clipped at accessibility text sizes.
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }
@@ -131,6 +165,32 @@ private struct ComposeTarget: Identifiable {
     var callsign: String
 }
 
+// MARK: - Kind styling (shared by row and detail header)
+
+private extension APRSEntry {
+    // Position/object get a teal-ish blend of accent and green so they read as
+    // their own category yet stay inside the theme (Night collapses to red).
+    func kindColor(_ t: AppTheme) -> Color {
+        if isOutgoing { return t.accent }
+        switch kind {
+        case .message:  return t.accent
+        case .bulletin: return t.amber
+        case .weather:  return t.green
+        default:        return t.accent.mix(with: t.green, by: 0.5)
+        }
+    }
+
+    var kindIcon: String {
+        switch kind {
+        case .message:  return isOutgoing ? "arrow.up.message" : "message"
+        case .bulletin: return "info.circle"
+        case .weather:  return "cloud.sun"
+        case .object:   return "mappin.circle"
+        default:        return isOutgoing ? "paperplane" : "location"
+        }
+    }
+}
+
 // MARK: - APRS Row
 
 struct APRSRow: View {
@@ -139,25 +199,7 @@ struct APRSRow: View {
     var entry: APRSEntry
     var distanceMi: Double?
 
-    private var kindColor: Color {
-        if entry.isOutgoing { return t.accent }
-        switch entry.kind {
-        case .message:  return t.accent
-        case .bulletin: return t.amber
-        case .weather:  return t.green
-        default:        return t.label2
-        }
-    }
-
-    private var kindIcon: String {
-        switch entry.kind {
-        case .message:  return entry.isOutgoing ? "arrow.up.message" : "message"
-        case .bulletin: return "info.circle"
-        case .weather:  return "cloud.sun"
-        case .object:   return "mappin.circle"
-        default:        return entry.isOutgoing ? "paperplane" : "location"
-        }
-    }
+    private var kindColor: Color { entry.kindColor(t) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -165,13 +207,14 @@ struct APRSRow: View {
                 .fill(kindColor.opacity(0.13))
                 .frame(width: iconSize, height: iconSize)
                 .overlay(
-                    Image(systemName: kindIcon)
+                    Image(systemName: entry.kindIcon)
                         .font(.body.weight(.medium))
                         .foregroundStyle(kindColor)
                 )
-                .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 3) {
+            // One spacing value between every line so the rhythm is even; the
+            // old per-line paddings stacked up under the chip row.
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(entry.isOutgoing && entry.kind == .message ? "→ \(entry.callsign)" : entry.callsign)
                         .font(.subheadline.monospaced().bold())
@@ -203,16 +246,15 @@ struct APRSRow: View {
                 if !entry.text.isEmpty {
                     Text(entry.text)
                         .font(.subheadline)
-                        .lineSpacing(3)
+                        .lineSpacing(2)
                         .foregroundStyle(t.label2)
                         .lineLimit(2)
-                        .padding(.top, 1)
                 }
                 HStack(spacing: 8) {
                     if entry.isOutgoing {
                         Text("Sent")
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(t.surface)  // on-accent text; .white breaks Night
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
                             .background(t.accent)
@@ -231,11 +273,13 @@ struct APRSRow: View {
                             .foregroundStyle(t.label3)
                     }
                 }
-                .padding(.top, 4)
             }
             .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
         }
-        .padding(.vertical, 4)
+        // The chip's own 2pt box padding sits at the bottom edge, so trim 1pt
+        // there to balance against the circle's hard top edge.
+        .padding(.top, 3)
+        .padding(.bottom, 2)
     }
 }
 
@@ -273,18 +317,19 @@ struct APRSDetailView: View {
             Section {
                 VStack(spacing: 4) {
                     Circle()
-                        .fill(t.accent.opacity(0.13))
+                        .fill(entry.kindColor(t).opacity(0.13))
                         .frame(width: headerIconSize, height: headerIconSize)
                         .overlay(
-                            Image(systemName: "message")
+                            Image(systemName: entry.kindIcon)
                                 .font(.title2.weight(.medium))
-                                .foregroundStyle(t.accent)
+                                .foregroundStyle(entry.kindColor(t))
                         )
+                        .accessibilityHidden(true)
                     Text(entry.callsign)
                         .font(.title2.monospaced().bold())
                         .foregroundStyle(t.label)
                     HStack(spacing: 4) {
-                        Text("Heard \(entry.time)")
+                        Text("\(entry.isOutgoing ? "Sent" : "Heard") \(entry.time)")
                         if let dist = entry.distanceMi(from: store.locationManager.location) {
                             Text("· \(String(format: "%.1f", dist)) mi")
                         }
@@ -297,28 +342,22 @@ struct APRSDetailView: View {
             }
 
             Section {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(entry.kind.label)
+                // Kind and time already sit in the section header and station header;
+                // only delivery status is new here. VStack so long status lines wrap
+                // at large text sizes instead of colliding.
+                VStack(alignment: .leading, spacing: 4) {
+                    if live.isOutgoing && live.kind == .message {
+                        Text(live.wasAcknowledged ? "Acknowledged"
+                             : live.isUndelivered ? "Undelivered"
+                             : "Awaiting ack · retry \(live.retryCount)/\(APRSController.maxRetries)")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(t.accent)
-                        if live.isOutgoing && live.kind == .message {
-                            Text(live.wasAcknowledged ? "Acknowledged"
-                                 : live.isUndelivered ? "Undelivered"
-                                 : "Awaiting ack · retry \(live.retryCount)/\(APRSController.maxRetries)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(live.wasAcknowledged ? t.green
-                                                 : live.isUndelivered ? t.red : t.label3)
-                        }
-                        if entry.isOutgoing, let digi = entry.heardViaDigi {
-                            Text("Heard via \(digi)")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(t.green)
-                        }
-                        Spacer()
-                        Text(entry.time)
-                            .font(.caption)
-                            .foregroundStyle(t.label2)
+                            .foregroundStyle(live.wasAcknowledged ? t.green
+                                             : live.isUndelivered ? t.red : t.label3)
+                    }
+                    if entry.isOutgoing, let digi = entry.heardViaDigi {
+                        Text("Heard via \(digi)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(t.green)
                     }
                     Text(entry.text.isEmpty ? "(no text)" : entry.text)
                         .font(.body)
