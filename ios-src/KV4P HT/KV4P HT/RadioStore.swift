@@ -118,6 +118,7 @@ class RadioStore {
     let radio: RadioModuleController
     let ble: BLEManager
     @ObservationIgnored private var isApplyingDeviceStateToUI = false
+    @ObservationIgnored private var settingsHydrator = RadioSettingsHydrator()
 
     // ── Location
     let locationManager = LocationManager()
@@ -383,7 +384,7 @@ class RadioStore {
         ble.onTransportReady = { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.hydrateUISettingsFromAppliedState()
+                self.hydrateUISettingsFromRadio(adoptAll: true)
                 self.ble.setRxAudioMuted(self.effectiveRxMuted)
                 // Fire any message retries that came due while disconnected.
                 self.aprs.processDueRetries()
@@ -393,7 +394,7 @@ class RadioStore {
             guard let self else { return }
             self.meterGate.deviceState(txActive: ds.mode == 0, at: Date())
             self.refreshMeterGate()
-            self.hydrateUISettingsFromAppliedState()
+            self.hydrateUISettingsFromRadio()
             self.ble.setRxAudioMuted(self.effectiveRxMuted)
         }
         aprs.updateBeaconTimer()
@@ -492,18 +493,21 @@ class RadioStore {
         UserDefaults.standard.set(data, forKey: Self.notifySettingsKey)
     }
 
-    private func hydrateUISettingsFromAppliedState() {
+    // Radio settings follow changes in the controller's desired state, never
+    // the applied state on each frame (see RadioSettingsHydrator). adoptAll
+    // on a new connection: the UI takes the radio's settings wholesale.
+    private func hydrateUISettingsFromRadio(adoptAll: Bool = false) {
         guard let ds = radio.deviceState else { return }
+        let update = settingsHydrator.update(from: radio.desiredState, force: adoptAll)
         isApplyingDeviceStateToUI = true
         defer { isApplyingDeviceStateToUI = false }
-        squelch = ds.squelch
-        bandwidth = ds.bw == DRA818_25K ? 0 : 1
-        txPower = (!radio.hasHighLowPowerSwitch || (ds.flags & HOST_STATE_HIGH_POWER) != 0) ? "High" : "Low"
-        // Firmware DSP stop filters (see RadioModuleController.setFilters):
-        // FILTER_LOW is the high-pass, FILTER_HIGH the low-pass. Both sit after
-        // the AFSK/squelch taps, so they only shape voice audio.
-        filterHighPass = (ds.flags & HOST_STATE_FILTER_LOW) != 0
-        filterLowPass = (ds.flags & HOST_STATE_FILTER_HIGH) != 0
+        if let v = update.squelch { squelch = v }
+        if let v = update.bandwidth { bandwidth = v == DRA818_25K ? 0 : 1 }
+        if let v = update.highPower { txPower = (!radio.hasHighLowPowerSwitch || v) ? "High" : "Low" }
+        // The DSP filters sit after the AFSK/squelch taps, so they only shape
+        // voice audio.
+        if let v = update.filterHighPass { filterHighPass = v }
+        if let v = update.filterLowPass { filterLowPass = v }
         if let vfo = Self.appliedVfoConfig(ds, simplexSwitchActive: isSimplexFrequencySwitchActive) {
             vfoOffset = vfo.offset
             vfoToneIndex = vfo.toneIndex
