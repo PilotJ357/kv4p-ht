@@ -74,6 +74,9 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     // the CCCD subscribe edge, so if iOS reuses a link the firmware never saw
     // drop (CCCD still enabled), no HELLO arrives and setup hangs. Bumping
     // setupToken cancels the pending watchdog.
+    // Main-thread only. Smoothed advertisement RSSI per scanned radio and when
+    // it was last published to discoveredDevices.
+    @ObservationIgnored private var scanRSSI: [UUID: (average: Double, shownAt: Date)] = [:]
     @ObservationIgnored private var helloReceived = false
     @ObservationIgnored private var resubscribeAttempted = false
     @ObservationIgnored private var setupToken = 0
@@ -90,6 +93,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         guard central.state == .poweredOn else { return }
         onMain {
             self.discoveredDevices = []
+            self.scanRSSI = [:]
             self.bleState = .scanning
         }
         central.scanForPeripherals(withServices: [BLE_KISS_SERVICE_UUID],
@@ -290,13 +294,26 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? "KV4P-HT"
         let rssi = RSSI.intValue
+        guard rssi != 127 else { return }  // 127 = RSSI unavailable
         onMain {
-            if let idx = self.discoveredDevices.firstIndex(where: { $0.id == peripheral.identifier }) {
-                self.discoveredDevices[idx].rssi = rssi
+            // Advertisement RSSI is noisy and, with duplicates allowed, arrives
+            // many times a second. Smooth it and publish at most once a second
+            // per radio so the picker's signal readout stays readable.
+            let id = peripheral.identifier
+            let now = Date()
+            var filter = self.scanRSSI[id] ?? (average: Double(rssi), shownAt: .distantPast)
+            filter.average += 0.25 * (Double(rssi) - filter.average)
+            if let idx = self.discoveredDevices.firstIndex(where: { $0.id == id }) {
+                if now.timeIntervalSince(filter.shownAt) >= 1 {
+                    self.discoveredDevices[idx].rssi = Int(filter.average.rounded())
+                    filter.shownAt = now
+                }
             } else {
                 self.discoveredDevices.append(DiscoveredDevice(
-                    id: peripheral.identifier, peripheral: peripheral, name: name, rssi: rssi))
+                    id: id, peripheral: peripheral, name: name, rssi: rssi))
+                filter.shownAt = now
             }
+            self.scanRSSI[id] = filter
         }
     }
 

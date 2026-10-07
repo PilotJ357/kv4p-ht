@@ -152,19 +152,14 @@ private struct DeviceRow: View {
     var isConnecting: Bool
     var onTap: () -> Void
 
-    private var rssiIcon: String {
+    // Signal bars filled by strength; the dBm figure sits underneath.
+    private var signalLevel: Double {
         switch device.rssi {
-        case ..<(-80): return "wifi.exclamationmark"
-        case ..<(-65): return "wifi"
-        default:       return "wifi"
-        }
-    }
-
-    private var rssiColor: Color {
-        switch device.rssi {
-        case ..<(-80): return t.amber
-        case ..<(-65): return t.label2
-        default:       return t.green
+        case (-60)...:     return 1
+        case (-70)...:     return 0.75
+        case (-80)...:     return 0.5
+        case (-90)...:     return 0.25
+        default:           return 0
         }
     }
 
@@ -192,9 +187,10 @@ private struct DeviceRow: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 3) {
-                    Image(systemName: rssiIcon)
+                    Image(systemName: "cellularbars", variableValue: signalLevel)
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(rssiColor)
+                        .foregroundStyle(t.label2)
+                        .accessibilityLabel("Signal strength")
                     Text("\(device.rssi) dBm")
                         .font(.caption2.weight(.semibold).monospaced())
                         .foregroundStyle(t.label3)
