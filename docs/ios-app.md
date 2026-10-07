@@ -228,8 +228,10 @@ frequency-switch beacon restores original frequency, voice PTT unaffected.
 - `@preconcurrency import CoreBluetooth` — CoreBluetooth types aren't Sendable.
 - CBCentralManager methods are thread-safe; callbacks arrive on `bleQueue`.
   Don't hop through `@Sendable` dispatch closures just to call `connect()`.
-- Deployment target is iOS 26.5 — use current APIs (`AVAudioApplication`
-  record permission, `Map(position:)` + `Annotation`, `MKReverseGeocodingRequest`).
+- Deployment target is iOS 18.0 — use current APIs (`AVAudioApplication`
+  record permission, `Map(position:)` + `Annotation`). Anything newer needs an
+  `#available` gate: live captions (`SpeechAnalyzer`) are iOS 26 only and
+  report `CaptionsStatus.needsNewerOS` on older systems.
   Build is warning-clean as of `4c4aacd`; keep it that way.
 
 ---

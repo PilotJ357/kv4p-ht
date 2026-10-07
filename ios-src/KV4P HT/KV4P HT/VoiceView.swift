@@ -1090,7 +1090,7 @@ struct CaptionsSheet: View {
                 }
             case .denied:
                 statusButton("Open Settings") { openURL(CaptionsStatus.appSettingsURL) }
-            case .restricted, .unavailable, .listening:
+            case .needsNewerOS, .restricted, .unavailable, .listening:
                 EmptyView()
             }
         }

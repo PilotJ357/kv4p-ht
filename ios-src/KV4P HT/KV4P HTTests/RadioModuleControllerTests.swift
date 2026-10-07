@@ -166,6 +166,22 @@ struct RadioModuleControllerTests {
         #expect(sent.frames[1].squelch == 2)
     }
 
+    // Status frames sent before firmware applies a change still carry the old
+    // value; desired state (which drives the UI) must not snap back to it.
+    @Test func staleDeviceStateKeepsPendingSquelch() {
+        let seed = makeDeviceState(seq: 7, squelch: 2)
+        let (controller, sent) = makeReadyController(seed: seed)
+        controller.updateDeviceState(echo(sent.frames[0]))
+        controller.setSquelch(6)
+
+        controller.updateDeviceState(echo(sent.frames[0]))  // pre-apply report
+        #expect(controller.desiredSquelch == 6)
+
+        controller.updateDeviceState(echo(sent.frames.last!))
+        #expect(controller.desiredSquelch == 6)
+        #expect(controller.isAppliedStateInSync)
+    }
+
     @Test func appliedStateSyncTracksFirmwareEcho() {
         let (controller, sent) = makeReadyController()
         controller.setSquelch(6)

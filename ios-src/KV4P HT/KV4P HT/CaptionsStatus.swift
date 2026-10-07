@@ -1,10 +1,12 @@
 import Speech
 import UIKit
 
-// What live captions can do right now. Derived from the user's toggle, the
-// speech-recognition permission, and on-device support; only `.listening`
-// runs the recognizer. Captions never fall back to server recognition.
+// What live captions can do right now. Derived from the OS version, the
+// user's toggle, the speech-recognition permission, and on-device support;
+// only `.listening` runs the recognizer. Captions never fall back to server
+// recognition.
 nonisolated enum CaptionsStatus: Equatable {
+    case needsNewerOS        // SpeechAnalyzer requires iOS 26
     case off                 // user turned Live captions off
     case needsPermission     // permission not asked yet
     case denied              // user declined speech recognition
@@ -12,9 +14,12 @@ nonisolated enum CaptionsStatus: Equatable {
     case unavailable         // no on-device recognition for the language
     case listening
 
-    static func resolve(enabled: Bool,
+    static func resolve(osSupported: Bool,
+                        enabled: Bool,
                         authorization: SFSpeechRecognizerAuthorizationStatus,
                         supportsOnDevice: Bool) -> CaptionsStatus {
+        // Nothing the user can change fixes this, so don't ask for permission.
+        guard osSupported else { return .needsNewerOS }
         guard enabled else { return .off }
         // Permission first: on-device support is only trusted once the
         // recognizer is authorized, and the prompt must not be gated on it.
@@ -37,6 +42,8 @@ nonisolated enum CaptionsStatus: Equatable {
     // User-facing explanation; nil when captions are working.
     func message(language: String) -> String? {
         switch self {
+        case .needsNewerOS:
+            return "Live captions require iOS 26 or later."
         case .off:
             return "Live captions are off."
         case .needsPermission:
