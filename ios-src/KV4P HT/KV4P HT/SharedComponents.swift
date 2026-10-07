@@ -115,6 +115,7 @@ struct SMeter: View {
 // MARK: - Settings icon tile
 
 struct IconTile: View {
+    @Environment(\.theme) var t
     var color: Color
     var systemImage: String
     var size: CGFloat = 30
@@ -126,7 +127,8 @@ struct IconTile: View {
             .overlay(
                 Image(systemName: systemImage)
                     .font(.system(size: size * 0.44, weight: .semibold))
-                    .foregroundStyle(.white)
+                    // Night stays dark on red so no white pixels break dark adaptation.
+                    .foregroundStyle(t.mode == .night ? t.bg : Color.white)
             )
     }
 }
