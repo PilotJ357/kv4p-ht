@@ -25,146 +25,116 @@ struct DevicePickerView: View {
         ble.isDemo || ble.bleState == .idle || ble.bleState == .scanning
     }
 
+    private var busy: Bool { scanning || ble.bleState == .connecting || ble.bleState == .connected }
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Button("Cancel") {
+        List {
+            Section {
+                if ble.bleUnavailable {
+                    ContentUnavailableView {
+                        Label("Bluetooth Unavailable", systemImage: "bluetooth.slash")
+                    } description: {
+                        Text("Enable Bluetooth in Settings to connect to your KV4P BLE radio.")
+                    }
+                    .foregroundStyle(t.label, t.label2)
+                    .listRowBackground(Color.clear)
+                } else if ble.discoveredDevices.isEmpty && !scanning {
+                    ContentUnavailableView {
+                        Label("No radios found", systemImage: "antenna.radiowaves.left.and.right")
+                    } description: {
+                        Text("Make sure your KV4P BLE radio is powered on and within range.")
+                    } actions: {
+                        Button("Scan for Radios") { ble.startScan() }
+                            .foregroundStyle(.white)
+                            .glassProminentButtonStyle()
+                            .controlSize(.large)
+                            .tint(t.accent)
+                    }
+                    .foregroundStyle(t.label, t.label2)
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(ble.discoveredDevices) { device in
+                        DeviceRow(device: device, isConnecting: ble.bleState == .connecting || ble.bleState == .connected) {
+                            ble.stopScan()
+                            ble.connect(device)
+                        }
+                    }
+                }
+            } header: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(busy ? t.amber : t.label3)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: busy ? t.amber : .clear, radius: 3)
+                    Text(stateLabel)
+                    Spacer()
+                    if !ble.discoveredDevices.isEmpty {
+                        Text("\(ble.discoveredDevices.count) found")
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(t.label2)
+                .textCase(nil)
+            }
+            .listRowBackground(t.surface)
+
+            if showDemo {
+                Section {
+                    DemoRadioRow(
+                        connected: ble.isDemo && ble.bleState == .ready,
+                        connecting: ble.isDemo && ble.bleState != .ready
+                    ) {
+                        ble.connectDemo()
+                    }
+                } header: {
+                    Text("No radio?").foregroundStyle(t.label3)
+                } footer: {
+                    Text("Simulated signals and APRS traffic. Nothing is transmitted.")
+                        .foregroundStyle(t.label3)
+                }
+                .listRowBackground(t.surface)
+            }
+
+            if ble.bleState == .ready || ble.bleState == .connected {
+                Section {
+                    Button(role: .destructive) {
+                        ble.disconnect()
+                    } label: {
+                        Text("Disconnect")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(t.red)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .listRowBackground(t.redSoft)
+            }
+        }
+        .listRowSeparatorTint(t.sep)
+        .scrollContentBackground(.hidden)
+        .background(t.bg.ignoresSafeArea())
+        .navigationTitle("Add Radio")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                CloseButton {
                     ble.stopScan()
                     dismiss()
                 }
-                .font(.system(size: 17))
-                .foregroundStyle(t.accent)
-
-                Spacer()
-
-                Text("Add Radio")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(t.label)
-
-                Spacer()
-
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     ble.stopScan()
                     ble.startScan()
                 } label: {
                     if scanning {
                         ProgressView()
-                            .tint(t.accent)
-                            .frame(width: 32, height: 32)
                     } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(t.accent)
-                            .frame(width: 32, height: 32)
+                        Label("Scan Again", systemImage: "arrow.clockwise")
                     }
                 }
                 .disabled(ble.isDemo || ble.bleState == .connecting || ble.bleState == .connected)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-
-            // State banner
-            HStack(spacing: 10) {
-                if scanning || ble.bleState == .connecting || ble.bleState == .connected {
-                    Circle()
-                        .fill(t.amber)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: t.amber, radius: 3)
-                } else {
-                    Circle()
-                        .fill(t.label3)
-                        .frame(width: 7, height: 7)
-                }
-                Text(stateLabel)
-                    .font(.system(size: 14))
-                    .foregroundStyle(t.label2)
-                Spacer()
-                if !ble.discoveredDevices.isEmpty {
-                    Text("\(ble.discoveredDevices.count) found")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(t.label3)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 14)
-
-            if ble.bleUnavailable {
-                BLEUnavailableView()
-            } else if ble.discoveredDevices.isEmpty && !scanning {
-                // Empty state
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 48, weight: .thin))
-                        .foregroundStyle(t.label3)
-                    Text("No radios found")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(t.label)
-                    Text("Make sure your KV4P BLE radio is powered on and within range.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(t.label2)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                    Button("Scan for Radios") {
-                        ble.startScan()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(t.accent)
-                    .controlSize(.large)
-                    .buttonBorderShape(.roundedRectangle(radius: 14))
-                    .padding(.horizontal, 40)
-                    .padding(.top, 8)
-                    Spacer()
-                }
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(Array(ble.discoveredDevices.enumerated()), id: \.element.id) { idx, device in
-                            DeviceRow(
-                                device: device,
-                                isConnecting: ble.bleState == .connecting || ble.bleState == .connected,
-                                isLast: idx == ble.discoveredDevices.count - 1
-                            ) {
-                                ble.stopScan()
-                                ble.connect(device)
-                            }
-                        }
-                    }
-                    .background(t.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                }
-            }
-
-            if showDemo {
-                DemoRadioSection(
-                    connected: ble.isDemo && ble.bleState == .ready,
-                    connecting: ble.isDemo && ble.bleState != .ready
-                ) {
-                    ble.connectDemo()
-                }
-            }
-
-            // Disconnect row (when already connected)
-            if ble.bleState == .ready || ble.bleState == .connected {
-                Button {
-                    ble.disconnect()
-                } label: {
-                    Text("Disconnect")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(t.red)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(t.redSoft)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 20)
-            }
         }
-                .background(t.bg.ignoresSafeArea())
         .onAppear {
             if ble.bleState == .idle { ble.startScan() }
         }
@@ -180,169 +150,105 @@ private struct DeviceRow: View {
     @Environment(\.theme) var t
     var device: DiscoveredDevice
     var isConnecting: Bool
-    var isLast: Bool
     var onTap: () -> Void
 
-    private var rssiIcon: String {
+    // Signal bars filled by strength; the dBm figure sits underneath.
+    private var signalLevel: Double {
         switch device.rssi {
-        case ..<(-80): return "wifi.exclamationmark"
-        case ..<(-65): return "wifi"
-        default:       return "wifi"
-        }
-    }
-
-    private var rssiColor: Color {
-        switch device.rssi {
-        case ..<(-80): return t.amber
-        case ..<(-65): return t.label2
-        default:       return t.green
+        case (-60)...:     return 1
+        case (-70)...:     return 0.75
+        case (-80)...:     return 0.5
+        case (-90)...:     return 0.25
+        default:           return 0
         }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Button(action: onTap) {
-                HStack(spacing: 14) {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(t.accentSoft)
-                        .frame(width: 40, height: 40)
-                        .overlay(
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(t.accent)
-                        )
+        Button(action: onTap) {
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(t.accentSoft)
+                    .frame(width: 40, height: 40)
+                    .overlay(
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(t.accent)
+                    )
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(device.name)
-                            .font(.system(size: 16.5, weight: .semibold))
-                            .foregroundStyle(t.label)
-                        Text(device.id.uuidString.prefix(8).uppercased())
-                            .font(.system(size: 12.5, design: .monospaced))
-                            .foregroundStyle(t.label3)
-                    }
-
-                    Spacer()
-
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Image(systemName: rssiIcon)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(rssiColor)
-                        Text("\(device.rssi) dBm")
-                            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(t.label3)
-                    }
-
-                    if isConnecting {
-                        ProgressView().tint(t.accent)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(t.label3)
-                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(device.name)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(t.label)
+                    Text(device.id.uuidString.prefix(8).uppercased())
+                        .font(.caption.monospaced())
+                        .foregroundStyle(t.label3)
                 }
-                .padding(.horizontal, 16)
-                .frame(minHeight: 62)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(isConnecting)
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            if !isLast {
-                Divider().padding(.leading, 70).background(t.sep)
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    Image(systemName: "cellularbars", variableValue: signalLevel)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(t.label2)
+                        .accessibilityLabel("Signal strength")
+                    Text("\(device.rssi) dBm")
+                        .font(.caption2.weight(.semibold).monospaced())
+                        .foregroundStyle(t.label3)
+                }
+
+                if isConnecting {
+                    ProgressView().tint(t.accent)
+                }
             }
+            .frame(minHeight: 50)
+            .contentShape(Rectangle())
         }
+        .disabled(isConnecting)
     }
 }
 
 // MARK: - Demo radio
 
-private struct DemoRadioSection: View {
+private struct DemoRadioRow: View {
     @Environment(\.theme) var t
     var connected: Bool
     var connecting: Bool
     var onTap: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("NO RADIO?")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(t.label3)
-                .padding(.horizontal, 16)
+        Button(action: onTap) {
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(t.amber.opacity(0.18))
+                    .frame(width: 40, height: 40)
+                    .overlay(
+                        Image(systemName: "play.circle")
+                            .font(.system(size: 19, weight: .medium))
+                            .foregroundStyle(t.amber)
+                    )
 
-            Button(action: onTap) {
-                HStack(spacing: 14) {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(t.amber.opacity(0.18))
-                        .frame(width: 40, height: 40)
-                        .overlay(
-                            Image(systemName: "play.circle")
-                                .font(.system(size: 19, weight: .medium))
-                                .foregroundStyle(t.amber)
-                        )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Demo Radio")
-                            .font(.system(size: 16.5, weight: .semibold))
-                            .foregroundStyle(t.label)
-                        Text("Try the app with a simulated radio")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(t.label3)
-                    }
-
-                    Spacer()
-
-                    if connecting {
-                        ProgressView().tint(t.accent)
-                    } else if connected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(t.green)
-                    } else {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(t.label3)
-                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Demo Radio")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(t.label)
+                    Text("Try the app with a simulated radio")
+                        .font(.footnote)
+                        .foregroundStyle(t.label3)
                 }
-                .padding(.horizontal, 16)
-                .frame(minHeight: 62)
-                .contentShape(Rectangle())
+
+                Spacer()
+
+                if connecting {
+                    ProgressView().tint(t.accent)
+                } else if connected {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(t.green)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(connected || connecting)
-            .background(t.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-
-            Text("Simulated signals and APRS traffic. Nothing is transmitted.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(t.label3)
-                .padding(.horizontal, 16)
+            .frame(minHeight: 50)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 16)
-    }
-}
-
-// MARK: - BLE unavailable
-
-private struct BLEUnavailableView: View {
-    @Environment(\.theme) var t
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "bluetooth.slash")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(t.red)
-            Text("Bluetooth Unavailable")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(t.label)
-            Text("Enable Bluetooth in Settings to connect to your KV4P BLE radio.")
-                .font(.system(size: 14))
-                .foregroundStyle(t.label2)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            Spacer()
-        }
+        .disabled(connected || connecting)
     }
 }

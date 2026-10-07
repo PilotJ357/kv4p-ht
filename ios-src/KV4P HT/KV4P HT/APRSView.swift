@@ -42,71 +42,56 @@ struct APRSView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Filter chips
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(filters, id: \.self) { f in
-                        let on = f == store.aprsFilter
-                        Button(f) { store.aprsFilter = f }
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .foregroundStyle(on ? .white : t.label)
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 6)
-                            .background(on ? t.accent : t.fill)
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                    }
+        let entries = filteredEntries
+        List {
+            ForEach(entries) { entry in
+                Button {
+                    selectedEntry = entry
+                } label: {
+                    APRSRow(entry: entry,
+                            distanceMi: entry.distanceMi(from: store.locationManager.location))
                 }
-                .padding(.horizontal, 16)
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
             }
-            .padding(.bottom, 10)
-
-            // Entry list
-            if filteredEntries.isEmpty {
-                Spacer()
-                VStack(spacing: 10) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 30))
-                        .foregroundStyle(t.label3)
-                    Text("No APRS packets yet")
-                        .font(.system(size: 15))
-                        .foregroundStyle(t.label2)
-                    Text(tuneHint)
-                        .font(.system(size: 13))
-                        .foregroundStyle(t.label3)
-                }
-                Spacer()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(filteredEntries.enumerated()), id: \.element.id) { idx, entry in
-                            Button {
-                                selectedEntry = entry
-                            } label: {
-                                APRSRow(entry: entry,
-                                        distanceMi: entry.distanceMi(from: store.locationManager.location),
-                                        isLast: idx == filteredEntries.count - 1)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(t.bg.ignoresSafeArea())
+        .overlay {
+            if entries.isEmpty {
+                ContentUnavailableView {
+                    Label {
+                        Text("No APRS packets yet")
+                            .foregroundStyle(t.label2)
+                    } icon: {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundStyle(t.label3)
                     }
-                    .background(t.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
+                } description: {
+                    Text(tuneHint)
+                        .foregroundStyle(t.label3)
                 }
             }
         }
-        .background(t.bg.ignoresSafeArea())
         .searchable(text: $searchText, prompt: "Callsign or message text")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Filter", selection: $store.aprsFilter) {
+                        ForEach(filters, id: \.self) { f in
+                            Text(f).tag(f)
+                        }
+                    }
+                } label: {
+                    Label("Filter", systemImage: store.aprsFilter == "All"
+                          ? "line.3.horizontal.decrease.circle"
+                          : "line.3.horizontal.decrease.circle.fill")
+                }
                 Button {
                     composeTarget = ComposeTarget(callsign: "")
                 } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 16, weight: .semibold))
+                    Label("New Message", systemImage: "square.and.pencil")
                 }
                 .disabled(!canSend)
             }
@@ -147,9 +132,9 @@ private struct ComposeTarget: Identifiable {
 
 struct APRSRow: View {
     @Environment(\.theme) var t
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 38
     var entry: APRSEntry
     var distanceMi: Double?
-    var isLast: Bool
 
     private var kindColor: Color {
         if entry.isOutgoing { return t.accent }
@@ -172,88 +157,82 @@ struct APRSRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                Circle()
-                    .fill(kindColor.opacity(0.13))
-                    .frame(width: 38, height: 38)
-                    .overlay(
-                        Image(systemName: kindIcon)
-                            .font(.system(size: 17, weight: .medium))
-                            .foregroundStyle(kindColor)
-                    )
-                    .padding(.top, 1)
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(kindColor.opacity(0.13))
+                .frame(width: iconSize, height: iconSize)
+                .overlay(
+                    Image(systemName: kindIcon)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(kindColor)
+                )
+                .padding(.top, 1)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(entry.isOutgoing && entry.kind == .message ? "→ \(entry.callsign)" : entry.callsign)
-                            .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(t.label)
-                        if entry.isOutgoing && entry.kind == .message {
-                            Image(systemName: entry.wasAcknowledged
-                                  ? "checkmark.circle.fill"
-                                  : entry.isUndelivered
-                                  ? "exclamationmark.circle"
-                                  : entry.heardViaDigi != nil
-                                  ? "dot.radiowaves.up.forward" : "clock")
-                                .font(.system(size: 12))
-                                .foregroundStyle(entry.wasAcknowledged
-                                                 ? t.green
-                                                 : entry.isUndelivered
-                                                 ? t.red
-                                                 : entry.heardViaDigi != nil
-                                                 ? t.accent : t.label3)
-                        } else if entry.isOutgoing, entry.heardViaDigi != nil {
-                            Image(systemName: "dot.radiowaves.up.forward")
-                                .font(.system(size: 12))
-                                .foregroundStyle(t.accent)
-                        }
-                        Spacer()
-                        Text(entry.time)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(t.label2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(entry.isOutgoing && entry.kind == .message ? "→ \(entry.callsign)" : entry.callsign)
+                        .font(.subheadline.monospaced().bold())
+                        .foregroundStyle(t.label)
+                    if entry.isOutgoing && entry.kind == .message {
+                        Image(systemName: entry.wasAcknowledged
+                              ? "checkmark.circle.fill"
+                              : entry.isUndelivered
+                              ? "exclamationmark.circle"
+                              : entry.heardViaDigi != nil
+                              ? "dot.radiowaves.up.forward" : "clock")
+                            .font(.caption)
+                            .foregroundStyle(entry.wasAcknowledged
+                                             ? t.green
+                                             : entry.isUndelivered
+                                             ? t.red
+                                             : entry.heardViaDigi != nil
+                                             ? t.accent : t.label3)
+                    } else if entry.isOutgoing, entry.heardViaDigi != nil {
+                        Image(systemName: "dot.radiowaves.up.forward")
+                            .font(.caption)
+                            .foregroundStyle(t.accent)
                     }
-                    if !entry.text.isEmpty {
-                        Text(entry.text)
-                            .font(.system(size: 14.5))
-                            .lineSpacing(3)
-                            .foregroundStyle(t.label2)
-                            .lineLimit(2)
-                            .padding(.top, 1)
-                    }
-                    HStack(spacing: 8) {
-                        if entry.isOutgoing {
-                            Text("Sent")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(t.accent)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        Text(entry.kind.label)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(kindColor)
+                    Spacer()
+                    Text(entry.time)
+                        .font(.caption)
+                        .foregroundStyle(t.label2)
+                }
+                if !entry.text.isEmpty {
+                    Text(entry.text)
+                        .font(.subheadline)
+                        .lineSpacing(3)
+                        .foregroundStyle(t.label2)
+                        .lineLimit(2)
+                        .padding(.top, 1)
+                }
+                HStack(spacing: 8) {
+                    if entry.isOutgoing {
+                        Text("Sent")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
-                            .background(kindColor.opacity(0.10))
+                            .background(t.accent)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
-                        if let dist = distanceMi {
-                            Text(String(format: "%.1f mi", dist))
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(t.label3)
-                        }
                     }
-                    .padding(.top, 4)
+                    Text(entry.kind.label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(kindColor)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(kindColor.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    if let dist = distanceMi {
+                        Text(String(format: "%.1f mi", dist))
+                            .font(.caption2)
+                            .foregroundStyle(t.label3)
+                    }
                 }
+                .padding(.top, 4)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
-
-            if !isLast {
-                Divider().padding(.leading, 66).background(t.sep)
-            }
+            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
         }
+        .padding(.vertical, 4)
     }
 }
 
@@ -262,6 +241,7 @@ struct APRSRow: View {
 struct APRSDetailView: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
+    @ScaledMetric(relativeTo: .title2) private var headerIconSize: CGFloat = 60
     @Bindable var store: RadioStore
     var entry: APRSEntry
     var onReply: (String) -> Void
@@ -285,119 +265,120 @@ struct APRSDetailView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        List {
             // Station header
-            VStack(spacing: 4) {
-                Circle()
-                    .fill(t.accent.opacity(0.13))
-                    .frame(width: 60, height: 60)
-                    .overlay(
-                        Image(systemName: "message")
-                            .font(.system(size: 26, weight: .medium))
-                            .foregroundStyle(t.accent)
-                    )
-                Text(entry.callsign)
-                    .font(.system(size: 22, weight: .bold, design: .monospaced))
-                    .foregroundStyle(t.label)
-                HStack(spacing: 4) {
-                    Text("Heard \(entry.time)")
-                    if let dist = entry.distanceMi(from: store.locationManager.location) {
-                        Text("· \(String(format: "%.1f", dist)) mi")
-                    }
-                }
-                .font(.system(size: 14))
-                .foregroundStyle(t.label2)
-            }
-            .padding(.bottom, 16)
-
-            ScrollView {
+            Section {
                 VStack(spacing: 4) {
-                    ListGroupView(header: entry.kind.label) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Text(entry.kind.label)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(t.accent)
-                                if live.isOutgoing && live.kind == .message {
-                                    Text(live.wasAcknowledged ? "Acknowledged"
-                                         : live.isUndelivered ? "Undelivered"
-                                         : "Awaiting ack · retry \(live.retryCount)/\(APRSController.maxRetries)")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(live.wasAcknowledged ? t.green
-                                                         : live.isUndelivered ? t.red : t.label3)
-                                }
-                                if entry.isOutgoing, let digi = entry.heardViaDigi {
-                                    Text("Heard via \(digi)")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(t.green)
-                                }
-                                Spacer()
-                                Text(entry.time)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(t.label2)
-                            }
-                            Text(entry.text.isEmpty ? "(no text)" : entry.text)
-                                .font(.system(size: 14.5))
-                                .lineSpacing(3)
-                                .foregroundStyle(t.label)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 11)
-                    }
-
-                    if let lat = entry.lat, let lon = entry.lon {
-                        ListGroupView(header: "Position") {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(String(format: "%.5f, %.5f", lat, lon))
-                                    .font(.system(size: 14.5, design: .monospaced))
-                                    .foregroundStyle(t.label)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 11)
+                    Circle()
+                        .fill(t.accent.opacity(0.13))
+                        .frame(width: headerIconSize, height: headerIconSize)
+                        .overlay(
+                            Image(systemName: "message")
+                                .font(.title2.weight(.medium))
+                                .foregroundStyle(t.accent)
+                        )
+                    Text(entry.callsign)
+                        .font(.title2.monospaced().bold())
+                        .foregroundStyle(t.label)
+                    HStack(spacing: 4) {
+                        Text("Heard \(entry.time)")
+                        if let dist = entry.distanceMi(from: store.locationManager.location) {
+                            Text("· \(String(format: "%.1f", dist)) mi")
                         }
                     }
+                    .font(.subheadline)
+                    .foregroundStyle(t.label2)
+                }
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.clear)
+            }
 
+            Section {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(entry.kind.label)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(t.accent)
+                        if live.isOutgoing && live.kind == .message {
+                            Text(live.wasAcknowledged ? "Acknowledged"
+                                 : live.isUndelivered ? "Undelivered"
+                                 : "Awaiting ack · retry \(live.retryCount)/\(APRSController.maxRetries)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(live.wasAcknowledged ? t.green
+                                                 : live.isUndelivered ? t.red : t.label3)
+                        }
+                        if entry.isOutgoing, let digi = entry.heardViaDigi {
+                            Text("Heard via \(digi)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(t.green)
+                        }
+                        Spacer()
+                        Text(entry.time)
+                            .font(.caption)
+                            .foregroundStyle(t.label2)
+                    }
+                    Text(entry.text.isEmpty ? "(no text)" : entry.text)
+                        .font(.body)
+                        .lineSpacing(3)
+                        .foregroundStyle(t.label)
+                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+            } header: {
+                Text(entry.kind.label)
+                    .foregroundStyle(t.label2)
+            }
+
+            if let lat = entry.lat, let lon = entry.lon {
+                Section {
+                    Text(String(format: "%.5f, %.5f", lat, lon))
+                        .font(.body.monospaced())
+                        .foregroundStyle(t.label)
+                        .listRowBackground(t.surface)
+                        .listRowSeparatorTint(t.sep)
+                } header: {
+                    Text("Position")
+                        .foregroundStyle(t.label2)
+                }
+            }
+
+            if canReply || canResend {
+                Section {
                     if canReply {
                         Button {
                             onReply(entry.fromCallsign)
                         } label: {
-                            HStack {
-                                Image(systemName: "arrowshape.turn.up.left")
-                                Text("Reply")
-                            }
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
-                            .background(t.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 13))
+                            Label("Reply", systemImage: "arrowshape.turn.up.left")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
+                        .glassProminentButtonStyle()
+                        .controlSize(.large)
+                        .tint(t.accent)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                     }
 
                     if canResend {
                         Button {
                             store.aprs.resendNow(entry.id)
                         } label: {
-                            HStack {
-                                Image(systemName: "arrow.clockwise")
-                                Text(live.isUndelivered ? "Resend (retry expired)" : "Resend now")
-                            }
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
-                            .background(live.isUndelivered ? t.red : t.accent)
-                            .clipShape(RoundedRectangle(cornerRadius: 13))
+                            Label(live.isUndelivered ? "Resend (retry expired)" : "Resend now",
+                                  systemImage: "arrow.clockwise")
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
+                        .glassProminentButtonStyle()
+                        .controlSize(.large)
+                        .tint(live.isUndelivered ? t.red : t.accent)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                     }
                 }
-                .padding(.bottom, 16)
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
         .navigationTitle(entry.callsign)
         .navigationBarTitleDisplayMode(.inline)
@@ -421,55 +402,69 @@ struct APRSComposeView: View {
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            ListGroupView(footer: "Leave the recipient blank to send a CQ bulletin. Messages are sent on the current frequency.") {
-                TextFieldRow(title: "To", text: $toCallsign,
-                             placeholder: "Callsign (optional)", isLast: false, autocap: .characters)
-                TextFieldRow(title: "Message", text: $messageText,
-                             placeholder: "Max 67 characters", isLast: true)
-            }
-
-            Button {
-                if store.aprs.sendMessage(to: toCallsign, text: messageText) {
-                    dismiss()
-                } else {
-                    sendFailed = true
+        Form {
+            Section {
+                LabeledContent {
+                    TextField("To", text: $toCallsign,
+                              prompt: Text("Callsign (optional)").foregroundStyle(t.label3))
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(t.label2)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                } label: {
+                    Text("To")
+                        .foregroundStyle(t.label)
                 }
-            } label: {
-                HStack {
-                    Image(systemName: "paperplane.fill")
-                    Text("Send")
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+
+                LabeledContent {
+                    TextField("Message", text: $messageText,
+                              prompt: Text("Max 67 characters").foregroundStyle(t.label3))
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(t.label2)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                } label: {
+                    Text("Message")
+                        .foregroundStyle(t.label)
                 }
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .background(canSend ? t.accent : t.fill)
-                .clipShape(RoundedRectangle(cornerRadius: 13))
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+            } footer: {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Leave the recipient blank to send a CQ bulletin. Messages are sent on the current frequency.")
+                        .foregroundStyle(t.label2)
+                    if store.isTxOutOfBand {
+                        Text("Current frequency is outside the amateur band — receive only.")
+                            .foregroundStyle(t.red)
+                    } else if sendFailed {
+                        Text("Couldn't send — check connection and callsign.")
+                            .foregroundStyle(t.red)
+                    }
+                }
             }
-            .disabled(!canSend)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-
-            if store.isTxOutOfBand {
-                Text("Current frequency is outside the amateur band — receive only.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(t.red)
-            } else if sendFailed {
-                Text("Couldn't send — check connection and callsign.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(t.red)
-            }
-
-            Spacer()
         }
-        .padding(.top, 8)
+        .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("New Message")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    if store.aprs.sendMessage(to: toCallsign, text: messageText) {
+                        dismiss()
+                    } else {
+                        sendFailed = true
+                    }
+                } label: {
+                    Label("Send", systemImage: "paperplane.fill")
+                }
+                .tint(t.accent)
+                .disabled(!canSend)
             }
         }
     }

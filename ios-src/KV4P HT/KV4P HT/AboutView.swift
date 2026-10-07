@@ -7,8 +7,6 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
-    @Environment(\.openURL) private var openURL
     @Bindable var store: RadioStore
 
     static let sourceURL = URL(string: "https://github.com/PilotJ357/kv4p-ht")!
@@ -27,119 +25,119 @@ struct AboutView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 4) {
-                ListGroupView(header: "Version") {
-                    AboutValueRow(label: "App", value: appVersion, isLast: false)
-                    AboutValueRow(label: "Radio firmware", value: firmwareVersion, isLast: true)
+        Form {
+            Section {
+                LabeledContent {
+                    Text(appVersion)
+                        .font(.system(.body, design: .monospaced, weight: .semibold))
+                        .foregroundStyle(t.label2)
+                        .textSelection(.enabled)
+                } label: {
+                    Text("App").foregroundStyle(t.label)
                 }
-
-                ListGroupView(header: "Amateur radio license",
-                              footer: "Receiving needs no license. Transmitting (voice, APRS messages, and position beacons) requires a valid amateur radio license, and you are responsible for following your country's rules for the frequencies and modes you use.") {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "checkmark.seal")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(t.amber)
-                        Text(store.txLicenseAcknowledged
-                             ? "You confirmed you hold an amateur radio license."
-                             : "You'll be asked to confirm you're licensed before your first voice transmission.")
-                            .font(.system(size: 15))
-                            .foregroundStyle(t.label)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                LabeledContent {
+                    Text(firmwareVersion)
+                        .font(.system(.body, design: .monospaced, weight: .semibold))
+                        .foregroundStyle(t.label2)
+                        .textSelection(.enabled)
+                } label: {
+                    Text("Radio firmware").foregroundStyle(t.label)
                 }
-
-                ListGroupView(header: "Open source",
-                              footer: "Pocket HT is free software under the GNU General Public License v3. This iOS app is built on the kv4p HT project by Vance Vagell (KV4P) and uses no third-party libraries — only Apple system frameworks.") {
-                    Button { openURL(Self.sourceURL) } label: {
-                        ListRow(title: "Source code", subtitle: "github.com/PilotJ357/kv4p-ht",
-                                isLast: false, accessory: ExternalLinkIcon() as (any View))
-                    }
-                    .buttonStyle(.plain)
-                    Button { openURL(Self.upstreamURL) } label: {
-                        ListRow(title: "kv4p HT project", subtitle: "github.com/VanceVagell/kv4p-ht",
-                                isLast: false, accessory: ExternalLinkIcon() as (any View))
-                    }
-                    .buttonStyle(.plain)
-                    NavigationLink {
-                        LicenseTextView()
-                    } label: {
-                        ListRow(title: "License", value: "GPLv3", isLast: true)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                ListGroupView(header: "Privacy") {
-                    NavigationLink {
-                        PrivacyPolicyView(backLabel: nil)
-                    } label: {
-                        ListRow(title: "Privacy policy", isLast: false)
-                    }
-                    .buttonStyle(.plain)
-                    Button { openURL(Self.privacyURL) } label: {
-                        ListRow(title: "Privacy policy on the web",
-                                isLast: true, accessory: ExternalLinkIcon() as (any View))
-                    }
-                    .buttonStyle(.plain)
-                }
+            } header: {
+                Text("Version").foregroundStyle(t.label2)
             }
-            .padding(.bottom, 32)
+            .listRowBackground(t.surface)
+            .listRowSeparatorTint(t.sep)
+
+            Section {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "checkmark.seal")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(t.amber)
+                    Text(store.txLicenseAcknowledged
+                         ? "You confirmed you hold an amateur radio license."
+                         : "You'll be asked to confirm you're licensed before your first voice transmission.")
+                        .font(.subheadline)
+                        .foregroundStyle(t.label)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Text("Amateur radio license").foregroundStyle(t.label2)
+            } footer: {
+                Text("Receiving needs no license. Transmitting (voice, APRS messages, and position beacons) requires a valid amateur radio license, and you are responsible for following your country's rules for the frequencies and modes you use.")
+                    .foregroundStyle(t.label2)
+            }
+            .listRowBackground(t.surface)
+            .listRowSeparatorTint(t.sep)
+
+            Section {
+                Link(destination: Self.sourceURL) {
+                    ExternalLinkLabel(title: "Source code", subtitle: "github.com/PilotJ357/kv4p-ht")
+                }
+                Link(destination: Self.upstreamURL) {
+                    ExternalLinkLabel(title: "kv4p HT project", subtitle: "github.com/VanceVagell/kv4p-ht")
+                }
+                NavigationLink {
+                    LicenseTextView()
+                } label: {
+                    LabeledContent {
+                        Text("GPLv3").foregroundStyle(t.label2)
+                    } label: {
+                        Text("License").foregroundStyle(t.label)
+                    }
+                }
+            } header: {
+                Text("Open source").foregroundStyle(t.label2)
+            } footer: {
+                Text("Pocket HT is free software under the GNU General Public License v3. This iOS app is built on the kv4p HT project by Vance Vagell (KV4P) and uses no third-party libraries — only Apple system frameworks.")
+                    .foregroundStyle(t.label2)
+            }
+            .listRowBackground(t.surface)
+            .listRowSeparatorTint(t.sep)
+
+            Section {
+                NavigationLink {
+                    PrivacyPolicyView()
+                } label: {
+                    Text("Privacy policy").foregroundStyle(t.label)
+                }
+                Link(destination: Self.privacyURL) {
+                    ExternalLinkLabel(title: "Privacy policy on the web")
+                }
+            } header: {
+                Text("Privacy").foregroundStyle(t.label2)
+            }
+            .listRowBackground(t.surface)
+            .listRowSeparatorTint(t.sep)
         }
+        .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.large)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { dismiss() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("More")
-                            .font(.system(size: 17))
-                    }
+    }
+}
+
+private struct ExternalLinkLabel: View {
+    @Environment(\.theme) var t
+    var title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .foregroundStyle(t.label)
+                if let sub = subtitle {
+                    Text(sub)
+                        .font(.footnote)
+                        .foregroundStyle(t.label2)
                 }
             }
-        }
-    }
-}
-
-private struct ExternalLinkIcon: View {
-    @Environment(\.theme) var t
-
-    var body: some View {
-        Image(systemName: "arrow.up.right.square")
-            .font(.system(size: 15))
-            .foregroundStyle(t.label3)
-            .accessibilityLabel("Opens in Safari")
-    }
-}
-
-private struct AboutValueRow: View {
-    @Environment(\.theme) var t
-    var label: String
-    var value: String
-    var isLast: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 15.5))
-                    .foregroundStyle(t.label)
-                Spacer()
-                Text(value)
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(t.label2)
-                    .textSelection(.enabled)
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 46)
-            if !isLast {
-                Divider().padding(.leading, 16).background(t.sep)
-            }
+            Spacer(minLength: 8)
+            Image(systemName: "arrow.up.right.square")
+                .font(.subheadline)
+                .foregroundStyle(t.label3)
+                .accessibilityLabel("Opens in Safari")
         }
     }
 }
