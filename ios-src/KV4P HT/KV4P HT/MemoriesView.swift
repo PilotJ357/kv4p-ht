@@ -31,7 +31,7 @@ struct MemoriesView: View {
             ForEach(groupedMemories, id: \.name) { group in
                 Section {
                     ForEach(Array(group.items.enumerated()), id: \.element.id) { idx, mem in
-                        MemoryRow(memory: mem, channelNum: idx + 1, groupColor: t.accent, isActive: mem.id == store.activeMemoryId, isEditMode: isEditMode, onTap: {
+                        MemoryRow(memory: mem, channelNum: idx + 1, isActive: mem.id == store.activeMemoryId, isEditMode: isEditMode, onTap: {
                             if isEditMode {
                                 editingMemory = mem
                             } else {
@@ -70,7 +70,7 @@ struct MemoriesView: View {
                         }
                     }
                 } header: {
-                    Text("\(group.name) · \(group.items.count)")
+                    Text(group.name)
                         .foregroundStyle(t.label2)
                 }
             }
@@ -78,6 +78,24 @@ struct MemoriesView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
+        .overlay {
+            if groupedMemories.isEmpty {
+                let searching = !searchText.isEmpty
+                ContentUnavailableView {
+                    Label {
+                        Text(searching ? "No Results" : "No memories yet")
+                            .foregroundStyle(t.label2)
+                    } icon: {
+                        Image(systemName: searching ? "magnifyingglass" : "star")
+                            .foregroundStyle(t.label3)
+                    }
+                } description: {
+                    Text(searching ? "No memories match \u{201C}\(searchText)\u{201D}."
+                                   : "Tap + to save a frequency.")
+                        .foregroundStyle(t.label3)
+                }
+            }
+        }
         // Large title like More; the search field sits under it and scrolls away with it.
         .navigationTitle("Memories")
         .navigationBarTitleDisplayMode(.large)
@@ -115,78 +133,75 @@ struct MemoriesView: View {
 
 struct MemoryRow: View {
     @Environment(\.theme) var t
+    @Environment(\.dynamicTypeSize) private var typeSize
     var memory: Memory
     var channelNum: Int
-    var groupColor: Color
     var isActive: Bool
     var isEditMode: Bool = false
     var onTap: () -> Void
 
-    @ScaledMetric(relativeTo: .caption2) private var badgeSize: CGFloat = 24
-    @ScaledMetric(relativeTo: .caption2) private var badgeWidth: CGFloat = 38
+    @ScaledMetric(relativeTo: .body) private var badgeSize: CGFloat = 30
+
+    // Same circle in both states so rows don't change shape when tuned:
+    // soft fill + accent number, or solid accent + on-accent number.
+    private var badge: some View {
+        Text("\(channelNum)")
+            .font(.footnote.bold().monospacedDigit())
+            .foregroundStyle(isActive ? t.surface : t.accent)
+            .frame(width: badgeSize, height: badgeSize)
+            .background(isActive ? t.accent : t.accentSoft, in: Circle())
+            .accessibilityLabel("Channel \(channelNum)")
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(memory.name)
+                .font(.body.weight(.medium))
+                .foregroundStyle(t.label)
+            Text(memory.metaString)
+                .font(.footnote)
+                .foregroundStyle(t.label2)
+        }
+    }
+
+    private var frequency: some View {
+        Text(memory.freqString)
+            .font(.system(.subheadline, design: .monospaced, weight: .semibold))
+            .foregroundStyle(t.label2)
+    }
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 0) {
-                Group {
-                    if isActive {
-                        ZStack {
-                            Circle()
-                                .fill(groupColor)
-                                .frame(width: badgeSize, height: badgeSize)
-                            Text("\(channelNum)")
-                                .font(.system(.caption2, design: .monospaced, weight: .bold))
-                                .tracking(0.3)
-                                .foregroundStyle(.white)
-                        }
-                    } else {
-                        Text("CH\(channelNum)")
-                            .font(.system(.caption2, design: .monospaced, weight: .bold))
-                            .tracking(0.3)
-                            .foregroundStyle(groupColor)
+            HStack(spacing: 12) {
+                badge
+
+                // Accessibility sizes: the frequency drops under the name instead of
+                // squeezing it into a one-word-per-line column.
+                if typeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 4) {
+                        details
+                        frequency
                     }
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    Spacer(minLength: 0)
+                } else {
+                    details
+                        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    Spacer(minLength: 8)
+                    frequency
                 }
-                .frame(width: badgeWidth)
-                .padding(.trailing, 12)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(memory.name)
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(isActive ? groupColor : t.label)
-                        if isActive {
-                            Text("TUNED")
-                                .font(.caption2.weight(.bold))
-                                .tracking(0.4)
-                                .foregroundStyle(t.green)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(t.greenSoft)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-                    Text(memory.metaString)
-                        .font(.footnote)
-                        .foregroundStyle(t.label2)
-                }
-                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-
-                Spacer(minLength: 8)
-
-                Text(memory.freqString)
-                    .font(.system(.subheadline, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(isActive ? groupColor : t.label2)
 
                 if isEditMode {
                     Image(systemName: "pencil.circle.fill")
                         .font(.body)
                         .foregroundStyle(t.accent)
-                        .padding(.leading, 10)
                 }
             }
         }
-        .listRowBackground(t.surface.overlay(isActive ? groupColor.opacity(0.08) : .clear))
+        // Tuned = soft row tint + solid badge; nothing else changes color.
+        .listRowBackground(t.surface.overlay(isActive ? t.accentSoft : .clear))
         .listRowSeparatorTint(t.sep)
+        .accessibilityValue(isActive ? "Tuned" : "")
     }
 }
 
@@ -221,6 +236,9 @@ struct AddMemoryView: View {
     }
 
     private let tones: [Float] = [0, 67.0, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9, 114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 162.2, 167.9, 173.8, 179.9, 186.2, 192.8, 203.5]
+
+    // Save is disabled until this parses, rather than silently doing nothing.
+    private var isValid: Bool { (Float(freqText) ?? 0) > 0 }
 
     private func save() {
         guard let freq = Float(freqText), freq > 0 else { return }
@@ -259,8 +277,9 @@ struct AddMemoryView: View {
                 .listRowSeparatorTint(t.sep)
 
                 Section {
-                    FieldRow(label: "Frequency", value: $freqText, mono: true)
-                    FieldRow(label: "Offset",    value: $offsetText, mono: true)
+                    FieldRow(label: "Frequency", value: $freqText, mono: true, keyboard: .decimalPad)
+                    // numbersAndPunctuation, not decimalPad: offsets can be negative.
+                    FieldRow(label: "Offset",    value: $offsetText, mono: true, keyboard: .numbersAndPunctuation)
                     Stepper(
                         onIncrement: {
                             if let idx = tones.firstIndex(of: toneValue), idx < tones.count - 1 { toneValue = tones[idx + 1] }
@@ -279,6 +298,9 @@ struct AddMemoryView: View {
                     }
                 } header: {
                     Text("Frequency").foregroundStyle(t.label2)
+                } footer: {
+                    Text("In MHz. Offset is signed (for example -0.600); 0 means simplex.")
+                        .foregroundStyle(t.label2)
                 }
                 .listRowBackground(t.surface)
                 .listRowSeparatorTint(t.sep)
@@ -319,6 +341,7 @@ struct AddMemoryView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save)
                         .fontWeight(.bold)
+                        .disabled(!isValid)
                 }
             }
         }
@@ -330,6 +353,7 @@ private struct FieldRow: View {
     var label: String
     @Binding var value: String
     var mono: Bool = false
+    var keyboard: UIKeyboardType = .default
 
     var body: some View {
         LabeledContent {
@@ -337,6 +361,7 @@ private struct FieldRow: View {
                 .font(mono ? .system(.body, design: .monospaced, weight: .semibold) : .body.weight(.semibold))
                 .foregroundStyle(t.label)
                 .multilineTextAlignment(.trailing)
+                .keyboardType(keyboard)
         } label: {
             Text(label).foregroundStyle(t.label)
         }
