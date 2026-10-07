@@ -302,6 +302,8 @@ class RadioStore {
     // so the PTT button unlatches; pttReleaseNotice says why.
     private(set) var pttForcedReleaseCount = 0
     var pttReleaseNotice: String?
+    // Set when a tune is refused because the module can't reach it.
+    var tuneNotice: String?
     // Re-read on foreground: the user can only change it in Settings.
     var micPermission = MicPermission(AVAudioApplication.shared.recordPermission)
     var bandwidth: UInt8 = 0 {  // 0=wide 25kHz, 1=narrow 12.5kHz
@@ -909,7 +911,26 @@ class RadioStore {
         }
     }
 
-    var scanList: [Memory] { memories.filter(\.scanEnabled) }
+    // Out-of-range channels are skipped rather than stalling the scan.
+    var scanList: [Memory] { memories.filter { $0.scanEnabled && isTunable($0) } }
+
+    /// Whether this radio's module can tune the memory's RX and TX frequency.
+    func isTunable(_ mem: Memory) -> Bool {
+        radio.isTunable(mem.freq) && radio.isTunable(mem.freq + mem.offset)
+    }
+
+    /// Why a tune can't go out, or nil. The SA818 rejects frequencies outside
+    /// its range and firmware retries that forever, hanging the radio.
+    nonisolated static func tuneRejection(rx: Float, tx: Float, min lo: Float, max hi: Float) -> String? {
+        let range = String(format: "%.0f–%.0f MHz", lo, hi)
+        if rx < lo || rx > hi {
+            return String(format: "%.3f MHz is outside this radio's ", rx) + range + " range."
+        }
+        if tx < lo || tx > hi {
+            return String(format: "Transmit frequency %.3f MHz is outside this radio's ", tx) + range + " range."
+        }
+        return nil
+    }
 
     func startScan() {
         guard !scanList.isEmpty else { return }
@@ -977,8 +998,20 @@ class RadioStore {
     // controller, which also drops `ptt` when that's out of band.
     func sendRadioState(freq: Float? = nil, ptt: Bool = false, simplexOverride: Bool = false) {
         let rxFreq = freq ?? currentFreq
+        let txFreq = rxFreq + (simplexOverride ? 0 : vfoOffset)
+        if let notice = Self.tuneRejection(rx: rxFreq, tx: txFreq,
+                                           min: radio.minRadioFreq, max: radio.maxRadioFreq) {
+            // Don't tune (the controller would drop it anyway), but never
+            // leave PTT keyed because the tune was refused.
+            tuneNotice = notice
+            radio.pttUp()
+            meterGate.setPTT(false, at: Date())
+            refreshMeterGate()
+            updateVoiceTx(keyed: false)
+            return
+        }
         radio.beginUpdate()
-        radio.setTxFrequency(rxFreq + (simplexOverride ? 0 : vfoOffset))
+        radio.setTxFrequency(txFreq)
         radio.setRxFrequency(rxFreq)
         radio.setSquelch(squelch)
         radio.setBandwidth(bandwidth == 0 ? DRA818_25K : DRA818_12K5)
