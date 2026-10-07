@@ -19,30 +19,38 @@ struct DeviceStrip: View {
                 .frame(width: 7, height: 7)
                 .shadow(color: dotColor, radius: 3)
             Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.system(size: 13, weight: .medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(t.label2)
             Text(connected && demo ? "Demo radio" : label)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(t.label)
+                .lineLimit(1)
             Text(!connected ? "Disconnected" : demo ? "Simulated" : "Connected")
-                .font(.system(size: 13))
+                .font(.footnote)
                 .foregroundStyle(t.label2)
-            Spacer()
+                .lineLimit(1)
+            Spacer(minLength: 0)
             if let batt = battery {
                 BattGlyph(pct: batt)
                 Text("\(batt)%")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundStyle(t.label2)
             }
+            // Tells it apart from a text field: tapping opens the radio picker.
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(t.label3)
+                .accessibilityHidden(true)
         }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .contentShape(RoundedRectangle(cornerRadius: 12))
             .glassTile(cornerRadius: 12, interactive: true, fallback: t.fill2)
             .padding(.horizontal, 20)
-            .padding(.bottom, 10)
+            .padding(.bottom, 8)
         }
         .buttonStyle(.plain)
+        .accessibilityHint("Choose a radio")
     }
 }
 
@@ -92,7 +100,7 @@ struct SMeter: View {
             }
             if showRSSI {
                 Text("RSSI \(rawRSSI)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.caption2.weight(.bold).monospacedDigit())
                     .foregroundStyle(t.label2)
                     .transition(.opacity)
             }
@@ -144,7 +152,7 @@ struct RxBadge: View {
                 .frame(width: 8, height: 8)
                 .shadow(color: state == .idle ? .clear : color, radius: 4)
             Text(state.label)
-                .font(.system(size: 12, weight: .bold))
+                .font(.caption.weight(.bold))
                 .tracking(0.8)
                 .foregroundStyle(color)
         }
@@ -162,16 +170,20 @@ struct InfoPill: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(key.uppercased())
-                .font(.system(size: 11, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .tracking(0.5)
                 .foregroundStyle(t.label2)
+                .lineLimit(1)
+            // Default design so words ("Simplex", "High") match the rest of the
+            // UI; tabular digits keep numbers aligned.
             Text(value)
-                .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                .font(.headline.monospacedDigit())
                 .foregroundStyle(t.label)
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(RoundedRectangle(cornerRadius: 13))
         .glassTile(cornerRadius: 13, interactive: true, fallback: t.fill2)
