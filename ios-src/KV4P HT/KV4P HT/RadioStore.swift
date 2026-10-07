@@ -85,18 +85,72 @@ struct APRSRegion {
     var freq: Float { Float(setting) ?? 0 }
     var memoryName: String { "APRS (\(shortName))" }
 
+    // 1200-baud AFSK channels (the only mode the radio decodes). Japan's
+    // 144.640 is its 9600-baud channel; 144.660 is 1200 (#108).
     static let all: [APRSRegion] = [
-        APRSRegion(setting: "144.3900", label: "144.3900 (Americas)",       shortName: "US"),
-        APRSRegion(setting: "144.5750", label: "144.5750 (New Zealand)",    shortName: "NZ"),
-        APRSRegion(setting: "144.6400", label: "144.6400 (Japan)",          shortName: "JP"),
-        APRSRegion(setting: "144.6600", label: "144.6600 (Australia)",      shortName: "AU"),
-        APRSRegion(setting: "144.8000", label: "144.8000 (Europe/Africa)",  shortName: "EU"),
-        APRSRegion(setting: "145.1750", label: "145.1750 (Australia, alt)", shortName: "AU alt"),
-        APRSRegion(setting: "145.8250", label: "145.8250 (ISS/satellite)",  shortName: "ISS"),
+        APRSRegion(setting: "144.3900", label: "144.3900 (North America)",     shortName: "US"),
+        APRSRegion(setting: "144.5750", label: "144.5750 (New Zealand)",       shortName: "NZ"),
+        APRSRegion(setting: "144.6400", label: "144.6400 (China)",             shortName: "CN"),
+        APRSRegion(setting: "144.6600", label: "144.6600 (Japan)",             shortName: "JP"),
+        APRSRegion(setting: "144.8000", label: "144.8000 (Europe/Africa)",     shortName: "EU"),
+        APRSRegion(setting: "144.9300", label: "144.9300 (Argentina/Uruguay)", shortName: "AR"),
+        APRSRegion(setting: "145.1750", label: "145.1750 (Australia)",         shortName: "AU"),
+        APRSRegion(setting: "145.5700", label: "145.5700 (Brazil)",            shortName: "BR"),
+        APRSRegion(setting: "145.8250", label: "145.8250 (ISS/satellite)",     shortName: "ISS"),
     ]
+
+    // Auto-generated memory names from earlier tables, still treated as
+    // "not renamed by the user".
+    static let legacyMemoryNames: Set<String> = ["APRS (AU alt)"]
 
     static func `for`(_ setting: String) -> APRSRegion? {
         all.first { $0.setting == setting }
+    }
+
+    // Region codes (ISO 3166-1) on 144.800: Europe, Russia, Turkey, South Africa.
+    private static let codes144800: Set<String> = [
+        "AD", "AL", "AT", "BA", "BE", "BG", "BY", "CH", "CY", "CZ", "DE", "DK",
+        "EE", "ES", "FI", "FO", "FR", "GB", "GG", "GI", "GR", "HR", "HU", "IE",
+        "IM", "IS", "IT", "JE", "LI", "LT", "LU", "LV", "MC", "MD", "ME", "MK",
+        "MT", "NL", "NO", "PL", "PT", "RO", "RS", "RU", "SE", "SI", "SK", "SM",
+        "TR", "UA", "VA", "XK", "ZA",
+    ]
+
+    /// Setting for a fresh install in the given region (ISO 3166-1 code, e.g.
+    /// from `Locale.current.region`). Unknown regions get 144.390.
+    static func defaultSetting(forRegion code: String?) -> String {
+        switch code?.uppercased() {
+        case "JP": return "144.6600"
+        case "CN": return "144.6400"
+        case "NZ": return "144.5750"
+        case "AU": return "145.1750"
+        case "AR", "UY": return "144.9300"
+        case "BR": return "145.5700"
+        case let c? where codes144800.contains(c): return "144.8000"
+        default: return "144.3900"
+        }
+    }
+
+    /// Fix for settings saved under the old, mislabeled table: "Japan" was
+    /// 144.640 and "Australia" was 144.660. Only moved when the device region
+    /// says that's what the user meant; nil means keep the stored setting.
+    static func migratedSetting(_ stored: String, region code: String?) -> String? {
+        switch (stored, code?.uppercased()) {
+        case ("144.6400", "JP"): return "144.6600"
+        case ("144.6600", "AU"): return "145.1750"
+        default: return nil
+        }
+    }
+
+    /// The linked APRS memory retuned to `region`. Its name follows the
+    /// region unless the user renamed it.
+    static func linkedMemory(_ mem: Memory, for region: APRSRegion) -> Memory {
+        var mem = mem
+        if all.contains(where: { $0.memoryName == mem.name }) || legacyMemoryNames.contains(mem.name) {
+            mem.name = region.memoryName
+        }
+        mem.freq = region.freq
+        return mem
     }
 }
 
@@ -157,6 +211,7 @@ class RadioStore {
     // ── Memories
     private static let memoriesKey = "savedMemories"
     private static let aprsMemorySeededKey = "aprsMemorySeeded"
+    private static let aprsFrequencyTableV2Key = "aprsFrequencyTableV2"
     private var isInitializing = true
     var memories: [Memory] = [] {
         didSet {
@@ -329,7 +384,13 @@ class RadioStore {
                        isRepeater: false, notes: "National calling frequency")
             ]
         }
-        loadAprsSettings()
+        let deviceRegion = Locale.current.region?.identifier
+        if !loadAprsSettings() {
+            // Nothing saved: start on the device region's APRS frequency, and
+            // persist it so a later region change doesn't move it silently.
+            aprsBeaconFrequency = APRSRegion.defaultSetting(forRegion: deviceRegion)
+            saveAprsSettings()
+        }
         seedAprsMemoryIfNeeded()
         loadNotifySettings()
         if let raw = UserDefaults.standard.string(forKey: Self.themeModeKey),
@@ -346,6 +407,7 @@ class RadioStore {
         saveTranscripts = UserDefaults.standard.bool(forKey: Self.saveTranscriptsKey)
         transcriptLog = TranscriptLog.load()
         isInitializing = false
+        migrateAprsFrequencyIfNeeded(region: deviceRegion)
         configureSpeechManager()
         // Location is only used by features the user opted into.
         if aprsBeaconEnabled || aprsNotify.distanceFilterMi != nil {
@@ -449,9 +511,10 @@ class RadioStore {
         var beaconInterruptRx: Bool?
     }
 
-    private func loadAprsSettings() {
+    // False when nothing has been saved yet.
+    private func loadAprsSettings() -> Bool {
         guard let data = UserDefaults.standard.data(forKey: Self.aprsSettingsKey),
-              let s = try? JSONDecoder().decode(APRSSettings.self, from: data) else { return }
+              let s = try? JSONDecoder().decode(APRSSettings.self, from: data) else { return false }
         callsign = s.callsign
         aprsSSID = s.ssid
         aprsSymbol = s.symbol
@@ -463,6 +526,7 @@ class RadioStore {
         aprsBeaconInterruptRx = s.beaconInterruptRx ?? true
         aprsPositionApprox = s.positionApprox
         silenceRxOnAprsFreq = s.silenceRxOnAprsFreq
+        return true
     }
 
     private func saveAprsSettings() {
@@ -1071,12 +1135,20 @@ class RadioStore {
     private func syncAprsMemory() {
         guard let region = APRSRegion.for(aprsBeaconFrequency),
               let idx = memories.firstIndex(where: \.aprsRegionLinked) else { return }
-        var mem = memories[idx]
-        if APRSRegion.all.contains(where: { $0.memoryName == mem.name }) {
-            mem.name = region.memoryName
+        memories[idx] = APRSRegion.linkedMemory(memories[idx], for: region)
+    }
+
+    // One-time move off the old, mislabeled APRS table (#108). Also renames
+    // an auto-named linked memory to its region's new name.
+    private func migrateAprsFrequencyIfNeeded(region: String?) {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.aprsFrequencyTableV2Key) else { return }
+        defaults.set(true, forKey: Self.aprsFrequencyTableV2Key)
+        if let fixed = APRSRegion.migratedSetting(aprsBeaconFrequency, region: region) {
+            aprsBeaconFrequency = fixed  // didSet saves and syncs the memory
+        } else {
+            syncAprsMemory()
         }
-        mem.freq = region.freq
-        memories[idx] = mem
     }
 
     private func saveMemories() {
