@@ -421,12 +421,13 @@ private struct RadioStage: View {
     // System volume (with output picker) and squelch.
     private var sliders: some View {
         VStack(spacing: compact ? 8 : 12) {
-            SliderRow(icon: "speaker.wave.2.fill") {
+            SliderRow(title: "Volume") {
                 SystemVolumeView(tint: UIColor(t.accent))
             } trailing: {
                 RoutePicker(tint: UIColor(t.label2), activeTint: UIColor(t.accent))
+                    .frame(width: 24)
             }
-            SliderRow(icon: "waveform") {
+            SliderRow(title: "Squelch") {
                 // Drags send the level to the radio once, on release (per-tick
                 // writes made the thumb bounce); VoiceOver adjustments send it immediately.
                 Slider(
@@ -445,8 +446,8 @@ private struct RadioStage: View {
                 .accessibilityLabel("Squelch")
                 .accessibilityValue("\(store.squelch)")
             } trailing: {
-                Text("\(store.squelch)")
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                Text("Level \(store.squelch)")
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(t.label2)
                     .accessibilityHidden(true)
             }
@@ -670,24 +671,27 @@ struct PTTButton: View {
 
 // MARK: - Slider row
 
-// Icon, slider, and a fixed-width trailing slot so the tracks line up.
+// Named slider: caption and trailing accessory (route picker, level) on
+// one line, the slider full width underneath.
 private struct SliderRow<Content: View, Trailing: View>: View {
     @Environment(\.theme) var t
-    var icon: String
+    var title: String
     @ViewBuilder var slider: () -> Content
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(t.label2)
-                .frame(width: 22)
-                .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(t.label2)
+                    .accessibilityHidden(true)
+                Spacer()
+                trailing()
+                    .frame(height: 24)
+            }
             slider()
                 .tint(t.accent)
-            trailing()
-                .frame(width: 28, height: 28)
         }
     }
 }
