@@ -115,7 +115,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             }
             self.userInitiatedDisconnect = false
             self.peripheral = device.peripheral
-            device.peripheral.delegate = self
+            self.becomeDelegate(of: device.peripheral)
             self.central.connect(device.peripheral)
             self.log("Connecting to \(device.name)...")
         }
@@ -361,7 +361,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 // Pending connects never time out; with bluetooth-central
                 // background mode iOS wakes us when the radio reappears.
                 self.peripheral = peripheral
-                peripheral.delegate = self
+                self.becomeDelegate(of: peripheral)
                 self.central.connect(peripheral)
                 self.log("Reconnecting when radio reappears...")
             }
@@ -596,6 +596,12 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         log("Setup stalled (\(reason)) — dropping link to retry")
         setupToken &+= 1
         if let p = peripheral { central.cancelPeripheralConnection(p) }
+    }
+
+    // Assigned from bleQueue closures; the main-actor-isolated
+    // CBPeripheralDelegate conformance can only be formed in isolated code.
+    private func becomeDelegate(of peripheral: CBPeripheral) {
+        peripheral.delegate = self
     }
 
     private func writeRaw(_ data: Data) {

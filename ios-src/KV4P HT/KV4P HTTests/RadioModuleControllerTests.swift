@@ -166,6 +166,22 @@ struct RadioModuleControllerTests {
         #expect(sent.frames[1].squelch == 2)
     }
 
+    // Status frames sent before firmware applies a change still carry the old
+    // value; desired state (which drives the UI) must not snap back to it.
+    @Test func staleDeviceStateKeepsPendingSquelch() {
+        let seed = makeDeviceState(seq: 7, squelch: 2)
+        let (controller, sent) = makeReadyController(seed: seed)
+        controller.updateDeviceState(echo(sent.frames[0]))
+        controller.setSquelch(6)
+
+        controller.updateDeviceState(echo(sent.frames[0]))  // pre-apply report
+        #expect(controller.desiredSquelch == 6)
+
+        controller.updateDeviceState(echo(sent.frames.last!))
+        #expect(controller.desiredSquelch == 6)
+        #expect(controller.isAppliedStateInSync)
+    }
+
     @Test func appliedStateSyncTracksFirmwareEcho() {
         let (controller, sent) = makeReadyController()
         controller.setSquelch(6)
@@ -325,6 +341,41 @@ struct RadioModuleControllerTests {
 
         controller.setTxFrequency(462.5625)  // FRS/GMRS
         #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+    }
+
+    // Firmware retries a rejected SA818 group command forever, so an
+    // out-of-range tune must never reach it (e.g. a 2 m memory on UHF).
+    @Test func outOfRangeTuneIsNeverSent() {
+        let seed = makeDeviceState(freqTx: 446.0, freqRx: 446.0)
+        let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 1)
+        let before = sent.frames.count
+        #expect(!controller.isTunable(146.52))
+        #expect(controller.isTunable(446.0))
+
+        controller.beginUpdate()
+        controller.setTxFrequency(144.39)
+        controller.setRxFrequency(144.39)
+        controller.endUpdate()
+        #expect(sent.frames.count == before)
+        #expect(controller.desiredState.freqRx == 446.0)
+        #expect(controller.desiredState.freqTx == 446.0)
+
+        // Half in range (TX pushed past the edge by an offset): also dropped.
+        controller.beginUpdate()
+        controller.setRxFrequency(479.9)
+        controller.setTxFrequency(484.9)
+        controller.endUpdate()
+        #expect(sent.frames.count == before)
+        #expect(controller.desiredState.freqRx == 446.0)
+
+        controller.setRxFrequency(440.0)
+        #expect(sent.frames.count == before + 1)
+        #expect(sent.frames.last?.freqRx == 440.0)
+    }
+
+    @Test func everythingTunableBeforeHello() {
+        #expect(RadioModuleController().isTunable(146.52))
+        #expect(RadioModuleController().isTunable(446.0))
     }
 
     @Test func adoptedDeviceStateRederivesTxAllowed() {

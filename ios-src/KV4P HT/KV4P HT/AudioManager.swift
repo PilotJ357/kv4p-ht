@@ -8,16 +8,51 @@ import os
 // (bulk memcpy only).
 // nonisolated: opts out of the project's MainActor default isolation — this
 // is lock-protected and called from the RT render thread and BLE queue.
-private nonisolated final class PCMRingBuffer: @unchecked Sendable {
+//
+// Also carries the RX playback mute. Mute changes are tagged with the stream
+// position written so far and take effect when playback reaches that sample,
+// not when they're requested. The squelch flag arrives with the audio it
+// belongs to but plays back a jitter-buffer depth (0.4–2 s) later; applying
+// it immediately cut the end of each transmission and, on reopen, played the
+// previous transmission's buffered squelch tail.
+nonisolated final class PCMRingBuffer: @unchecked Sendable {
     private var buf: [Float]
     private let cap: Int
     private var writeIdx = 0
     private var count    = 0
     private var _lock    = os_unfair_lock_s()
 
+    // Stream position = samples written since init (survives clear()).
+    private var totalWritten: Int64 = 0
+    // Mute state at the read head, and the latest requested state.
+    private var mutedAtReadHead = false
+    private var requestedMute   = false
+    // Pending mute changes in stream order. Capacity is reserved up front so
+    // the render thread never allocates.
+    private static let maxPendingMutes = 32
+    private var pendingMutes: [(at: Int64, on: Bool)] = []
+
     init(capacity: Int) {
         cap = capacity
         buf = [Float](repeating: 0, count: capacity)
+        pendingMutes.reserveCapacity(Self.maxPendingMutes)
+    }
+
+    /// Mute or unmute playback from the most recently written sample onward.
+    func setMuted(_ on: Bool) {
+        os_unfair_lock_lock(&_lock); defer { os_unfair_lock_unlock(&_lock) }
+        guard on != requestedMute else { return }
+        requestedMute = on
+        if count == 0 {
+            // Nothing buffered: the change is already at the read head.
+            pendingMutes.removeAll(keepingCapacity: true)
+            mutedAtReadHead = on
+            return
+        }
+        if pendingMutes.count == Self.maxPendingMutes {
+            mutedAtReadHead = pendingMutes.removeFirst().on
+        }
+        pendingMutes.append((at: totalWritten, on: on))
     }
 
     var available: Int {
@@ -46,6 +81,7 @@ private nonisolated final class PCMRingBuffer: @unchecked Sendable {
         }
         writeIdx += n
         count    += n
+        totalWritten += Int64(n)
         return n
     }
 
@@ -69,12 +105,28 @@ private nonisolated final class PCMRingBuffer: @unchecked Sendable {
             }
         }
         for i in n..<frameCount { dst[i] = 0 }
+
+        // Zero muted spans of [readPos, readPos + n), switching state at each
+        // pending change that falls inside the block.
+        let readPos = totalWritten - Int64(count)
+        var cursor = 0
+        while let change = pendingMutes.first, change.at < readPos + Int64(n) {
+            let at = Swift.max(cursor, Int(Swift.max(0, change.at - readPos)))
+            if mutedAtReadHead { for i in cursor..<at { dst[i] = 0 } }
+            cursor = at
+            mutedAtReadHead = change.on
+            pendingMutes.removeFirst()
+        }
+        if mutedAtReadHead { for i in cursor..<n { dst[i] = 0 } }
         count -= n
     }
 
     func clear() {
         os_unfair_lock_lock(&_lock); defer { os_unfair_lock_unlock(&_lock) }
         writeIdx = 0; count = 0
+        // Read head jumps to the write head, past every pending change.
+        if let last = pendingMutes.last { mutedAtReadHead = last.on }
+        pendingMutes.removeAll(keepingCapacity: true)
     }
 }
 
@@ -126,14 +178,10 @@ actor AudioManager {
     private var engine:     AVAudioEngine
     private var sourceNode: AVAudioSourceNode
     private let pcmFormat:  AVAudioFormat
-    nonisolated(unsafe) private let ringBuffer: PCMRingBuffer
+    private let ringBuffer: PCMRingBuffer
     // RT-safe one-shot startup gate. Render thread is sole writer (sets true).
     // Actor methods reset to false before engine starts / after engine stops.
     private let started: UnsafeMutablePointer<Bool>
-    // Phone-side RX playback gate. Silences audio while the firmware reports
-    // squelch closed, or while the user has muted RX on the APRS frequency.
-    // Set from RadioStore on each device-state update. Render thread is sole reader.
-    private let rxMuted: UnsafeMutablePointer<Bool>
     nonisolated(unsafe) private var playing = false
     // Set when a background engine restart fails ('!pla' etc.) — retried on
     // next foreground via recoverIfNeeded().
@@ -161,7 +209,6 @@ actor AudioManager {
     deinit {
         for obs in observations { NotificationCenter.default.removeObserver(obs) }
         started.deallocate()
-        rxMuted.deallocate()
     }
 
     init() {
@@ -172,22 +219,18 @@ actor AudioManager {
         let rb  = PCMRingBuffer(capacity: Self.capacitySamples)
         let st  = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
         st.initialize(to: false)
-        let mt  = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
-        mt.initialize(to: false)
 
-        (engine, sourceNode) = Self.makeEngine(format: fmt, ringBuffer: rb, started: st, muted: mt)
+        (engine, sourceNode) = Self.makeEngine(format: fmt, ringBuffer: rb, started: st)
 
         pcmFormat  = fmt
         ringBuffer = rb
         started    = st
-        rxMuted    = mt
         isAvailable = true
     }
 
     private static func makeEngine(format fmt: AVAudioFormat,
                                    ringBuffer rb: PCMRingBuffer,
-                                   started st: UnsafeMutablePointer<Bool>,
-                                   muted mt: UnsafeMutablePointer<Bool>)
+                                   started st: UnsafeMutablePointer<Bool>)
         -> (AVAudioEngine, AVAudioSourceNode)
     {
         let eng = AVAudioEngine()
@@ -227,12 +270,8 @@ actor AudioManager {
             for channel in UnsafeMutableAudioBufferListPointer(audioBufferList) {
                 if let ptr = channel.mData?.assumingMemoryBound(to: Float.self) {
                     // Always drain the ring buffer (keeps RX current and avoids
-                    // backlog), then zero the output when the software squelch
-                    // is closed so the user hears silence, not open-squelch hiss.
+                    // backlog); it zeroes spans muted by setRxMuted.
                     rb.read(into: ptr, frameCount: frames)
-                    if mt.pointee {
-                        for i in 0..<frames { ptr[i] = 0 }
-                    }
                 }
             }
             return noErr
@@ -248,8 +287,7 @@ actor AudioManager {
         engine.stop()
         (engine, sourceNode) = Self.makeEngine(format: pcmFormat,
                                                ringBuffer: ringBuffer,
-                                               started: started,
-                                               muted: rxMuted)
+                                               started: started)
     }
 
     // RX: .playback only — no mic hardware, no orange indicator, A2DP output.
@@ -306,10 +344,11 @@ actor AudioManager {
     /// non-trivial count with peak pinned near 1.0 means the RX audio is
     /// clipping (SA818 front-end / 16× firmware gain overload), which corrupts
     /// AFSK/APRS decode. Diagnostic only.
-    /// Open/close the phone-side software squelch gate on RX playback. Safe to
-    /// call from any thread (single Bool write, render thread is sole reader).
+    /// Mute/unmute RX playback (squelch closed, or RX silenced on the APRS
+    /// frequency). Takes effect when playback reaches the audio received so
+    /// far, keeping the gate in step with the jitter buffer. Any thread.
     nonisolated func setRxMuted(_ on: Bool) {
-        rxMuted.pointee = on
+        ringBuffer.setMuted(on)
     }
 
     nonisolated func takeRxStats() -> (peak: Float, clips: Int) {

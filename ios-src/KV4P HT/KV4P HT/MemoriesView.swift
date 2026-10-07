@@ -39,6 +39,8 @@ struct MemoriesView: View {
                                 store.applyMemory(mem)
                             }
                         })
+                        // This radio's module can't tune it (e.g. VHF memory on UHF).
+                        .opacity(store.isTunable(mem) ? 1 : 0.4)
                         .swipeActions(edge: .leading) {
                             Button {
                                 editingMemory = mem

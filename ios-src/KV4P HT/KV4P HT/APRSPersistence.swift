@@ -39,7 +39,7 @@ final class APRSPersistence {
             do {
                 try container.persistentStoreCoordinator.destroyPersistentStore(
                     at: url, type: NSPersistentStore.StoreType(rawValue: desc.type), options: nil)
-                try container.persistentStoreCoordinator.addPersistentStore(
+                _ = try container.persistentStoreCoordinator.addPersistentStore(
                     type: NSPersistentStore.StoreType(rawValue: desc.type),
                     at: url, options: nil)
             } catch {
