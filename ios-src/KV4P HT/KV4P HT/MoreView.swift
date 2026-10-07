@@ -40,7 +40,8 @@ struct MoreView: View {
                 NavigationLink { SettingsView(store: store) } label: {
                     SettingsValueRow(
                         title: "Settings",
-                        icon: IconTile(color: Color(hex: "8E8E93"), systemImage: "gearshape.fill")
+                        // Neutral gray like iOS Settings; Night has no gray, so its dimmed red.
+                        icon: IconTile(color: t.mode == .night ? t.label2 : Color(.systemGray), systemImage: "gearshape.fill")
                     )
                 }
                 NavigationLink { PrivacyPolicyView() } label: {
@@ -456,7 +457,8 @@ struct BeaconSettingsView: View {
                 } label: {
                     Label("Beacon now", systemImage: "dot.radiowaves.left.and.right")
                         .fontWeight(.semibold)
-                        .foregroundStyle(.white)
+                        // White would break Night's dark adaptation.
+                        .foregroundStyle(t.mode == .night ? t.bg : .white)
                         .frame(maxWidth: .infinity)
                 }
                 .glassProminentButtonStyle()
@@ -776,7 +778,7 @@ struct APRSNotificationsView: View {
         .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarTitleDisplayMode(.large)
         .onAppear(perform: refreshAuthStatus)
         // Returning from iOS Settings: pick up a permission change.
         .onChange(of: scenePhase) { _, phase in
