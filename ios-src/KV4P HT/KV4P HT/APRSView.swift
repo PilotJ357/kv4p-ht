@@ -11,6 +11,13 @@ struct APRSView: View {
 
     private let filters = ["All", "Messages", "Bulletins", "Positions", "Weather"]
 
+    private var tuneHint: String {
+        guard let region = APRSRegion.for(store.aprsBeaconFrequency) else {
+            return "Tune to your local APRS frequency to hear traffic"
+        }
+        return String(format: "Tune to %.3f MHz to hear APRS traffic", region.freq)
+    }
+
     private var filteredEntries: [APRSEntry] {
         var entries: [APRSEntry]
         switch store.aprsFilter {
@@ -64,7 +71,7 @@ struct APRSView: View {
                     Text("No APRS packets yet")
                         .font(.system(size: 15))
                         .foregroundStyle(t.label2)
-                    Text("Tune to 144.390 MHz to hear APRS traffic")
+                    Text(tuneHint)
                         .font(.system(size: 13))
                         .foregroundStyle(t.label3)
                 }
