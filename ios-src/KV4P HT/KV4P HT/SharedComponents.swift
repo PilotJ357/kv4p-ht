@@ -206,12 +206,25 @@ extension View {
     }
 
     /// Glass behind a tile on iOS 26; a plain fill in the same shape before.
-    @ViewBuilder func glassTile<S: ShapeStyle>(cornerRadius: CGFloat, interactive: Bool = false,
-                                               fallback: S) -> some View {
+    func glassTile<S: ShapeStyle>(cornerRadius: CGFloat, interactive: Bool = false,
+                                  fallback: S) -> some View {
+        modifier(GlassTile(cornerRadius: cornerRadius, interactive: interactive, fallback: fallback))
+    }
+}
+
+private struct GlassTile<S: ShapeStyle>: ViewModifier {
+    @Environment(\.theme) var t
+    var cornerRadius: CGFloat
+    var interactive: Bool
+    var fallback: S
+
+    func body(content: Content) -> some View {
         if #available(iOS 26, *) {
-            glassEffect(interactive ? .regular.interactive() : .regular, in: .rect(cornerRadius: cornerRadius))
+            // Untinted glass reads neutral grey over black; tint it red in Night.
+            let glass: Glass = t.mode == .night ? .regular.tint(t.surface2) : .regular
+            content.glassEffect(interactive ? glass.interactive() : glass, in: .rect(cornerRadius: cornerRadius))
         } else {
-            background(fallback, in: .rect(cornerRadius: cornerRadius))
+            content.background(fallback, in: .rect(cornerRadius: cornerRadius))
         }
     }
 }

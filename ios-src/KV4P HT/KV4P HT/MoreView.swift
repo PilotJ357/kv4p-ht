@@ -339,7 +339,7 @@ private struct SquelchSliderRow: View {
                     .foregroundStyle(t.label)
                 Spacer()
                 Text("Level \(store.squelch)")
-                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                    .font(.body.monospacedDigit())
                     .foregroundStyle(t.label2)
             }
             Slider(value: level, in: 0...9, step: 1, onEditingChanged: { editing in

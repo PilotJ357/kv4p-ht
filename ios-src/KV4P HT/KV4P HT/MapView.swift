@@ -90,24 +90,34 @@ struct APRSMapView: View {
         position = .userLocation(fallback: .automatic)
     }
 
+    private var stationMap: some View {
+        Map(position: $position) {
+            UserAnnotation()
+            ForEach(stations) { station in
+                Annotation(station.callsign, coordinate: station.coordinate) {
+                    pinButton(station)
+                }
+                // StationPin already draws the callsign chip.
+                .annotationTitles(.hidden)
+            }
+        }
+    }
+
+    private func pinButton(_ station: MapStation) -> some View {
+        Button {
+            selectedEntry = station.entry
+        } label: {
+            StationPin(station: station, isSelected: false)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .environment(\.theme, store.theme)
+    }
+
     var body: some View {
         ZStack {
-            Map(position: $position) {
-                UserAnnotation()
-                ForEach(stations) { station in
-                    Annotation(station.callsign, coordinate: station.coordinate) {
-                        Button {
-                            selectedEntry = station.entry
-                        } label: {
-                            StationPin(station: station, isSelected: false)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .environment(\.theme, store.theme)
-                    }
-                }
-            }
-            .ignoresSafeArea()
+            stationMap
+                .ignoresSafeArea()
 
             VStack {
                 Spacer()
