@@ -130,6 +130,11 @@ nonisolated final class PCMRingBuffer: @unchecked Sendable {
     }
 }
 
+extension Notification.Name {
+    // Posted before each RX/TX session category flip; userInfo["tx"]: Bool.
+    nonisolated static let audioSessionModeWillChange = Notification.Name("AudioSessionModeWillChange")
+}
+
 actor AudioManager {
     nonisolated let isAvailable: Bool
     nonisolated(unsafe) var onDecodedSamples: (([Float], Int) -> Void)?
@@ -294,6 +299,8 @@ actor AudioManager {
     // TX: .playAndRecord — mic active, indicator on, HFP on Bluetooth.
     private func configureSession(tx: Bool) throws {
         let session = AVAudioSession.sharedInstance()
+        NotificationCenter.default.post(name: .audioSessionModeWillChange,
+                                        object: nil, userInfo: ["tx": tx])
         if tx {
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.defaultToSpeaker, .allowBluetoothHFP])
