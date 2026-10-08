@@ -622,9 +622,59 @@ private struct SystemVolumeView: UIViewRepresentable {
     var tint: UIColor
 
     private final class SliderOnly: MPVolumeView {
+        // PTT flips the session category (.playback ↔ .playAndRecord), and
+        // the slider tracks the other category's volume mid-flip, so the
+        // thumb jumped on every key-up/key-down. Cover it with a snapshot
+        // while TX is up and for a settle window after returning to RX.
+        private static let settle: TimeInterval = 0.8
+        private var freeze: UIView?
+        private var unfreeze: DispatchWorkItem?
+        private var modeObserver: NSObjectProtocol?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            modeObserver = NotificationCenter.default.addObserver(
+                forName: .audioSessionModeWillChange, object: nil, queue: .main
+            ) { [weak self] note in
+                MainActor.assumeIsolated {
+                    self?.sessionModeWillChange(tx: note.userInfo?["tx"] as? Bool ?? false)
+                }
+            }
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        deinit {
+            if let modeObserver { NotificationCenter.default.removeObserver(modeObserver) }
+        }
+
+        private func sessionModeWillChange(tx: Bool) {
+            unfreeze?.cancel()
+            unfreeze = nil
+            if tx {
+                guard freeze == nil, window != nil,
+                      let snap = snapshotView(afterScreenUpdates: false) else { return }
+                snap.frame = bounds
+                snap.isUserInteractionEnabled = false
+                addSubview(snap)
+                freeze = snap
+            } else if freeze != nil {
+                let work = DispatchWorkItem { [weak self] in
+                    self?.freeze?.removeFromSuperview()
+                    self?.freeze = nil
+                }
+                unfreeze = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle, execute: work)
+            }
+        }
+
         override func layoutSubviews() {
             super.layoutSubviews()
             for case let button as UIButton in subviews { button.isHidden = true }
+            if let freeze {
+                freeze.frame = bounds
+                bringSubviewToFront(freeze)
+            }
         }
 
         // MPVolumeView pins its slider to the top edge, and re-lays it out on
