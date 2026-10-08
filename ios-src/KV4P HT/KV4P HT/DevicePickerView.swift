@@ -7,10 +7,30 @@ struct DevicePickerView: View {
     @Environment(\.theme) var t
     @Environment(\.dismiss) var dismiss
     @Bindable var ble: BLEManager
+    // .idle covers both "never scanned" and "scan stopped", so only the view
+    // can tell the first-open invite from a scan that came up empty.
+    @State private var hasScanned = false
+    // Set once a scan has run a while with nothing in range.
+    @State private var scanIsSlow = false
 
+    // What the radio list area shows. The empty states are mutually exclusive
+    // and tied to the BLE state, so none lingers once a connect is under way.
+    private enum Phase { case unavailable, invite, searching, noneFound, devices, linking }
+
+    private var phase: Phase {
+        if ble.bleUnavailable { return .unavailable }
+        if !ble.discoveredDevices.isEmpty { return .devices }
+        switch ble.bleState {
+        case .scanning:                       return .searching
+        case .idle:                           return hasScanned ? .noneFound : .invite
+        case .connecting, .connected, .ready: return .linking  // demo radio, nothing to list
+        }
+    }
+
+    // Header over the device list only; the empty states carry their own message.
     private var stateLabel: String {
         switch ble.bleState {
-        case .idle:       return "Ready to scan"
+        case .idle:       return "Tap a radio to connect"
         case .scanning:   return "Scanning…"
         case .connecting: return "Connecting…"
         case .connected:  return "Discovering services…"
@@ -27,56 +47,18 @@ struct DevicePickerView: View {
 
     private var busy: Bool { scanning || ble.bleState == .connecting || ble.bleState == .connected }
 
+    // Label color on a prominent button: white, except Night where white would
+    // break dark adaptation.
+    private var onTint: Color { t.mode == .night ? t.bg : .white }
+
+    private func scan() {
+        ble.stopScan()
+        ble.startScan()
+    }
+
     var body: some View {
         List {
-            Section {
-                if ble.bleUnavailable {
-                    ContentUnavailableView {
-                        Label("Bluetooth Unavailable", systemImage: "bluetooth.slash")
-                    } description: {
-                        Text("Enable Bluetooth in Settings to connect to your KV4P BLE radio.")
-                    }
-                    .foregroundStyle(t.label, t.label2)
-                    .listRowBackground(Color.clear)
-                } else if ble.discoveredDevices.isEmpty && !scanning {
-                    ContentUnavailableView {
-                        Label("No radios found", systemImage: "antenna.radiowaves.left.and.right")
-                    } description: {
-                        Text("Make sure your KV4P BLE radio is powered on and within range.")
-                    } actions: {
-                        Button("Scan for Radios") { ble.startScan() }
-                            .foregroundStyle(.white)
-                            .glassProminentButtonStyle()
-                            .controlSize(.large)
-                            .tint(t.accent)
-                    }
-                    .foregroundStyle(t.label, t.label2)
-                    .listRowBackground(Color.clear)
-                } else {
-                    ForEach(ble.discoveredDevices) { device in
-                        DeviceRow(device: device, isConnecting: ble.bleState == .connecting || ble.bleState == .connected) {
-                            ble.stopScan()
-                            ble.connect(device)
-                        }
-                    }
-                }
-            } header: {
-                HStack(spacing: 10) {
-                    Circle()
-                        .fill(busy ? t.amber : t.label3)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: busy ? t.amber : .clear, radius: 3)
-                    Text(stateLabel)
-                    Spacer()
-                    if !ble.discoveredDevices.isEmpty {
-                        Text("\(ble.discoveredDevices.count) found")
-                    }
-                }
-                .font(.subheadline)
-                .foregroundStyle(t.label2)
-                .textCase(nil)
-            }
-            .listRowBackground(t.surface)
+            radioSection
 
             if showDemo {
                 Section {
@@ -87,10 +69,10 @@ struct DevicePickerView: View {
                         ble.connectDemo()
                     }
                 } header: {
-                    Text("No radio?").foregroundStyle(t.label3)
+                    Text("No radio?").foregroundStyle(t.label2)
                 } footer: {
                     Text("Simulated signals and APRS traffic. Nothing is transmitted.")
-                        .foregroundStyle(t.label3)
+                        .foregroundStyle(t.label2)
                 }
                 .listRowBackground(t.surface)
             }
@@ -122,10 +104,7 @@ struct DevicePickerView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    ble.stopScan()
-                    ble.startScan()
-                } label: {
+                Button(action: scan) {
                     if scanning {
                         ProgressView()
                     } else {
@@ -135,12 +114,153 @@ struct DevicePickerView: View {
                 .disabled(ble.isDemo || ble.bleState == .connecting || ble.bleState == .connected)
             }
         }
-        .onAppear {
-            if ble.bleState == .idle { ble.startScan() }
+        .task {
+            hasScanned = hasScanned || scanning
+            // The central may not be powered on yet when the sheet opens (first
+            // launch, Bluetooth permission prompt) and startScan() silently
+            // no-ops until it is, so retry briefly instead of idling.
+            for _ in 0..<20 {
+                guard ble.bleState == .idle, !hasScanned, !Task.isCancelled else { break }
+                ble.startScan()
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { break }
+            }
+        }
+        .task(id: scanning) {
+            scanIsSlow = false
+            guard scanning else { return }
+            hasScanned = true
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            scanIsSlow = true
         }
         .onChange(of: ble.bleState) { _, state in
             if state == .ready { dismiss() }
         }
+    }
+
+    // MARK: Radio list / empty states
+
+    @ViewBuilder private var radioSection: some View {
+        switch phase {
+        case .devices:
+            Section {
+                ForEach(ble.discoveredDevices) { device in
+                    DeviceRow(device: device, isConnecting: ble.bleState == .connecting || ble.bleState == .connected) {
+                        ble.stopScan()
+                        ble.connect(device)
+                    }
+                }
+                .listRowBackground(t.surface)
+            } header: {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(busy ? t.amber : t.label3)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: busy ? t.amber : .clear, radius: 3)
+                        .accessibilityHidden(true)
+                    Text(stateLabel)
+                    Spacer()
+                    Text("\(ble.discoveredDevices.count) found")
+                }
+                .font(.subheadline)
+                .foregroundStyle(t.label2)
+                .textCase(nil)
+            }
+
+        case .unavailable:
+            stateSection(title: "Bluetooth Unavailable",
+                         message: "Enable Bluetooth in Settings to connect to your KV4P BLE radio.") {
+                Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                    .foregroundStyle(t.label2)
+            }
+
+        case .invite:
+            stateSection(title: "Find your radio",
+                         message: "Power on your KV4P BLE radio and keep it close, then scan.") {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .foregroundStyle(t.accent)
+            } actions: {
+                scanButton("Scan for Radios")
+            }
+
+        case .searching:
+            stateSection(title: "Searching for radios…",
+                         message: scanIsSlow
+                             ? "Still looking. Make sure your KV4P BLE radio is powered on and within range."
+                             : "Radios in range will appear here.") {
+                ProgressView().controlSize(.large).tint(t.accent)
+            }
+
+        case .noneFound:
+            stateSection(title: "No radios found",
+                         message: "Make sure your KV4P BLE radio is powered on and within range.") {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(t.label2)
+            } actions: {
+                scanButton("Scan Again")
+            }
+
+        case .linking:
+            EmptyView()
+        }
+    }
+
+    private func stateSection<Icon: View, Actions: View>(
+        title: String, message: String,
+        @ViewBuilder icon: () -> Icon,
+        @ViewBuilder actions: () -> Actions
+    ) -> some View {
+        Section {
+            PickerStateView(title: title, message: message, icon: icon, actions: actions)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+        }
+    }
+
+    private func stateSection<Icon: View>(
+        title: String, message: String, @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        stateSection(title: title, message: message, icon: icon) {}
+    }
+
+    private func scanButton(_ title: String) -> some View {
+        Button(action: scan) {
+            Text(title).foregroundStyle(onTint)
+        }
+        .glassProminentButtonStyle()
+        .controlSize(.large)
+        .tint(t.accent)
+    }
+}
+
+// MARK: - Empty / progress state
+
+private struct PickerStateView<Icon: View, Actions: View>: View {
+    @Environment(\.theme) var t
+    var title: String
+    var message: String
+    @ViewBuilder var icon: Icon
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
+                icon
+                    .font(.largeTitle)
+                    .frame(minHeight: 44)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(t.label)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(t.label2)
+            }
+            .multilineTextAlignment(.center)
+            .accessibilityElement(children: .combine)
+            actions
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
     }
 }
 
@@ -233,7 +353,7 @@ private struct DemoRadioRow: View {
                         .foregroundStyle(t.label)
                     Text("Try the app with a simulated radio")
                         .font(.footnote)
-                        .foregroundStyle(t.label3)
+                        .foregroundStyle(t.label2)
                 }
 
                 Spacer()

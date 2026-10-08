@@ -13,7 +13,24 @@ struct VoiceView: View {
     @State private var showCaptions = false
     @State private var showDevicePicker = false
     @State private var showSettings = false
-    @State private var stageLayout: StageLayout = .regular
+    // Raw space the tab gets; the layout is derived so text size can factor in.
+    @State private var stageSize: CGSize?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var stageLayout: StageLayout {
+        stageSize.map { StageLayout(size: $0, dynamicType: dynamicTypeSize) } ?? .regular
+    }
+
+    // The stage is fixed-height with no scrolling (PTT is a hold gesture, so it
+    // can't live in a ScrollView), so its text stops growing before it would
+    // push the PTT button under the tab bar.
+    private var typeCap: DynamicTypeSize {
+        switch stageLayout {
+        case .wide:    .xxxLarge
+        case .regular: .xxLarge
+        case .compact: .xLarge
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +39,7 @@ struct VoiceView: View {
                 demo: store.ble.isDemo,
                 action: { showDevicePicker = true }
             )
+            .dynamicTypeSize(...typeCap)
 
             Picker("Mode", selection: $store.voiceMode) {
                 ForEach(VoiceMode.allCases, id: \.self) { mode in
@@ -34,6 +52,7 @@ struct VoiceView: View {
 
             switch store.voiceMode {
             case .vfo:  VFOBody(store: store, layout: stageLayout)
+                            .dynamicTypeSize(...typeCap)
             case .scan: ScanBody(store: store)
             }
 
@@ -42,7 +61,7 @@ struct VoiceView: View {
                 Spacer(minLength: 0)
             }
         }
-        .onGeometryChange(for: StageLayout.self) { StageLayout(size: $0.size) } action: { stageLayout = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { stageSize = $0 }
         .background(t.bg.ignoresSafeArea())
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
@@ -110,9 +129,14 @@ struct VoiceView: View {
 nonisolated enum StageLayout: Equatable {
     case regular, compact, wide
 
-    init(size: CGSize) {
+    init(size: CGSize, dynamicType: DynamicTypeSize = .large) {
+        // The 650pt breakpoint is calibrated at the default text size; each step
+        // up eats roughly 14pt of stage height, so count it against the space.
+        let sizes = DynamicTypeSize.allCases
+        let steps = max(0, (sizes.firstIndex(of: min(dynamicType, .xxLarge)) ?? 0)
+                         - (sizes.firstIndex(of: .large) ?? 0))
         if size.width >= 700 { self = .wide }
-        else if size.height < 650 { self = .compact }
+        else if size.height - CGFloat(steps) * 14 < 650 { self = .compact }
         else { self = .regular }
     }
 }
@@ -128,8 +152,8 @@ private struct VFOBody: View {
         // Memory match supplies only name/description; freq, offset, and
         // tone always display firmware-applied state.
         let matched = store.memory(for: store.currentFreq)
-        // Band from HELLO (0 = VHF, else UHF); omit until the module reports.
-        let band = store.ble.hello.map { $0.rfModuleType == 0 ? "VHF · " : "UHF · " } ?? ""
+        // Band from HELLO (0 = VHF, else UHF); empty until the module reports.
+        let band = store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? ""
         RadioStage(
             store:        store,
             channelName:  matched?.name ?? store.currentFreqString,
@@ -137,7 +161,7 @@ private struct VFOBody: View {
             freq:         store.currentFreqString,
             offset:       store.currentOffsetString,
             tone:         store.currentToneString,
-            modeLabel:    band + "VFO",
+            modeLabel:    band,
             freqEditable: true,
             layout:       layout
         )
@@ -155,6 +179,7 @@ private struct RadioStage: View {
     var freq:         String
     var offset:       String
     var tone:         String
+    // Band ("VHF"/"UHF"); empty until the module reports.
     var modeLabel:    String
     var freqEditable: Bool = false
     var layout:       StageLayout = .regular
@@ -193,10 +218,10 @@ private struct RadioStage: View {
         store.voicePTTGate == .micDenied
     }
 
-    // Mode chip doubles as the TX time-out countdown in its last seconds.
-    private var chipLabel: String {
+    // Band chip doubles as the TX time-out countdown in its last seconds.
+    private var chipLabel: String? {
         if let remaining = store.txTimeoutRemaining { return "TX ends in \(remaining)s" }
-        return modeLabel
+        return modeLabel.isEmpty ? nil : modeLabel
     }
 
     private var showReleaseNotice: Binding<Bool> {
@@ -253,7 +278,7 @@ private struct RadioStage: View {
                     // swamps a track squeezed in beside the PTT button.
                     sliders
                         .padding(.horizontal, 20)
-                        .padding(.bottom, compact ? 10 : 16)
+                        .padding(.bottom, compact ? 8 : 10)
                     pttControl
                 }
             }
@@ -285,36 +310,41 @@ private struct RadioStage: View {
             FreqNumpad(store: store, currentFreq: freq)
                 .environment(\.theme, store.theme)
                 .preferredColorScheme(store.theme.isDark ? .dark : .light)
-                .presentationDetents([.height(470)])
+                .presentationDetents([.height(540), .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showOffsetTone) {
             OffsetToneSheet(store: store)
                 .environment(\.theme, store.theme)
                 .preferredColorScheme(store.theme.isDark ? .dark : .light)
-                .presentationDetents([.height(440)])
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
     }
 
-    // Mode chip, frequency, channel name, S-meter.
+    // Band chip, frequency, channel name, S-meter.
     private var readout: some View {
         VStack(spacing: 0) {
+            // Always laid out (placeholder text, hidden) so the stage doesn't
+            // jump when the band arrives or the countdown comes and goes.
             HStack(spacing: 6) {
                 Circle()
                     .fill(txApplied ? t.red : t.accent)
                     .frame(width: 6, height: 6)
-                Text(chipLabel)
-                    .font(.system(size: 12.5, weight: .bold))
+                Text(chipLabel ?? "VHF")
+                    .font(.caption.weight(.bold).monospacedDigit())
                     .tracking(1)
                     .foregroundStyle(t.label)
                     .textCase(.uppercase)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .background(t.fill)
             .clipShape(RoundedRectangle(cornerRadius: 9))
-            .padding(.top, compact ? 12 : 20)
+            .opacity(chipLabel == nil ? 0 : 1)
+            .accessibilityHidden(chipLabel == nil)
+            .padding(.top, compact ? 6 : 10)
 
             Group {
                 if freqEditable {
@@ -331,12 +361,15 @@ private struct RadioStage: View {
 
             VStack(spacing: 2) {
                 Text(channelName)
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(.title3.weight(.semibold))
                     .foregroundStyle(t.label)
                 Text(channelDesc)
-                    .font(.system(size: 13.5))
+                    .font(.footnote)
                     .foregroundStyle(t.label2)
             }
+            .lineLimit(1)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 20)
             .padding(.top, 2)
 
             HStack(spacing: 14) {
@@ -344,7 +377,7 @@ private struct RadioStage: View {
                        active: !store.meterSuppressed, rawRSSI: store.rawRSSI)
                 RxBadge(state: rxState)
             }
-            .padding(.top, 8)
+            .padding(.top, 6)
         }
     }
 
@@ -369,8 +402,8 @@ private struct RadioStage: View {
             .buttonStyle(.plain)
             .disabled(!store.radio.hasHighLowPowerSwitch)
         }
-        .padding(.top, 10)
-        .padding(.bottom, compact ? 10 : 14)
+        .padding(.top, 8)
+        .padding(.bottom, compact ? 6 : 8)
     }
 
     private var pttControl: some View {
@@ -420,14 +453,16 @@ private struct RadioStage: View {
 
     // System volume (with output picker) and squelch.
     private var sliders: some View {
-        VStack(spacing: compact ? 8 : 12) {
-            SliderRow(title: "Volume") {
+        VStack(spacing: compact ? 6 : 8) {
+            SliderRow(title: "Volume", icon: "speaker.wave.2.fill", tint: t.accent) {
                 SystemVolumeView(tint: UIColor(t.accent))
             } trailing: {
                 RoutePicker(tint: UIColor(t.label2), activeTint: UIColor(t.accent))
                     .frame(width: 24)
             }
-            SliderRow(title: "Squelch") {
+            // Amber and a dial icon set it apart from Volume (in Night the two
+            // tints are close, so the icon carries the difference).
+            SliderRow(title: "Squelch", icon: "dial.medium.fill", tint: t.amber) {
                 // Drags send the level to the radio once, on release (per-tick
                 // writes made the thumb bounce); VoiceOver adjustments send it immediately.
                 Slider(
@@ -455,149 +490,6 @@ private struct RadioStage: View {
     }
 }
 
-// MARK: - Offset / Tone editor
-
-private struct OffsetToneSheet: View {
-    @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
-    @Bindable var store: RadioStore
-
-    private enum Direction: Int, CaseIterable {
-        case minus, simplex, plus
-        var label: String {
-            switch self {
-            case .minus:   return "−"
-            case .simplex: return "Simplex"
-            case .plus:    return "+"
-            }
-        }
-    }
-
-    @State private var direction: Direction
-    @State private var magnitudeText: String
-    @State private var toneIndex: Int
-
-    private static let presets: [Float] = [0.600, 5.000]
-
-    init(store: RadioStore) {
-        self.store = store
-        // Seed from desired VFO state, not applied — this sheet edits intent.
-        let off = store.vfoOffset
-        _direction = State(initialValue: abs(off) < 0.0005 ? .simplex : (off > 0 ? .plus : .minus))
-        _magnitudeText = State(initialValue: String(format: "%.3f", abs(off) < 0.0005 ? 0.600 : abs(off)))
-        _toneIndex = State(initialValue: Int(store.vfoToneIndex))
-    }
-
-    private var magnitude: Float {
-        Float(magnitudeText) ?? 0.600
-    }
-
-    private func apply() {
-        let offset: Float
-        switch direction {
-        case .simplex: offset = 0
-        case .plus:    offset = magnitude
-        case .minus:   offset = -magnitude
-        }
-        store.setVfoConfig(offset: offset, toneIndex: UInt8(toneIndex))
-        dismiss()
-    }
-
-    var body: some View {
-        ZStack {
-            t.bg.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Channel Config")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(t.label)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 22)
-                    .padding(.bottom, 18)
-
-                // Offset
-                Text("TX OFFSET")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(t.label2)
-                    .padding(.horizontal, 24)
-                Picker("Direction", selection: $direction) {
-                    ForEach(Direction.allCases, id: \.self) { d in
-                        Text(d.label).tag(d)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-
-                if direction != .simplex {
-                    HStack(spacing: 8) {
-                        ForEach(Self.presets, id: \.self) { preset in
-                            Button {
-                                magnitudeText = String(format: "%.3f", preset)
-                            } label: {
-                                Text(String(format: "%.3f", preset))
-                                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(magnitude == preset ? .white : t.label)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 7)
-                                    .background(magnitude == preset ? t.accent : t.surface)
-                                    .clipShape(RoundedRectangle(cornerRadius: 9))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        TextField("MHz", text: $magnitudeText)
-                            .keyboardType(.decimalPad)
-                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(t.label)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(t.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                            .frame(width: 90)
-                        Text("MHz")
-                            .font(.system(size: 13))
-                            .foregroundStyle(t.label2)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
-                }
-
-                // Tone
-                Text("TX TONE (CTCSS)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(t.label2)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 18)
-                Picker("Tone", selection: $toneIndex) {
-                    Text("Off").tag(0)
-                    ForEach(1...CTCSS_TONES.count, id: \.self) { idx in
-                        Text(String(format: "%.1f Hz", CTCSS_TONES[idx - 1])).tag(idx)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .frame(height: 110)
-                .clipped()
-                .padding(.horizontal, 20)
-
-                Spacer(minLength: 0)
-
-                Button(action: apply) {
-                    Text("APPLY")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-                .glassProminentButtonStyle()
-                .controlSize(.large)
-                .tint(t.accent)
-                .padding(.horizontal, 28)
-                .padding(.bottom, 12)
-            }
-        }
-    }
-}
-
 // MARK: - PTT Button
 
 struct PTTButton: View {
@@ -608,14 +500,23 @@ struct PTTButton: View {
     var rxOnly: Bool = false
     // Microphone access denied; voice PTT can't key. RX ONLY wins if both.
     var noMic: Bool = false
-    // Outer ring; inner ring, face, and glyph scale with it.
+    // Outer ring; the face and glyph scale with it.
     var diameter: CGFloat = 168
 
     private var scale: CGFloat { diameter / 168 }
+    private var faceSize: CGFloat { diameter * 0.86 }
     private var inert: Bool { rxOnly || noMic }
     private var onAir: Bool { isDown && !inert }
-    private var ringColor: Color { inert ? t.label3 : (onAir ? t.red : t.accent) }
-    private var labelColor: Color { inert ? t.label2 : .white }
+    // Idle is a tinted disc and ON AIR a solid red one. Separating them by fill
+    // rather than hue keeps the states distinct in Night, where accent == red.
+    private var solidFill: Color { inert ? t.fill : (onAir ? t.red : t.accentSoft) }
+    private var glassTint: Color { inert ? t.fill : (onAir ? t.red : t.accent.opacity(0.35)) }
+    private var ringColor: Color { inert ? t.hairline : (onAir ? t.red : t.accent.opacity(0.4)) }
+    // Ink on the solid ON AIR face; Night stays dark on red so no white
+    // pixels break dark adaptation.
+    private var onFill: Color { t.mode == .night ? t.bg : Color.white }
+    private var glyphColor: Color { inert ? t.label2 : (onAir ? onFill : t.accent) }
+    private var captionColor: Color { inert ? t.label2 : (onAir ? onFill : t.label) }
     private var stateLabel: String {
         if rxOnly { return "RX ONLY" }
         if noMic { return "NO MIC" }
@@ -626,62 +527,66 @@ struct PTTButton: View {
         if noMic { return "Push to talk unavailable: microphone access denied" }
         return "Push to talk"
     }
-    private var grad: LinearGradient {
-        if inert {
-            return LinearGradient(colors: [t.fill, t.fill2], startPoint: .top, endPoint: .bottom)
-        } else if onAir {
-            return LinearGradient(colors: [Color(hex: "FF6B61"), t.red], startPoint: .top, endPoint: .bottom)
-        } else {
-            return LinearGradient(colors: [t.isDark ? Color(hex: "3A9BFF") : Color(hex: "3F96FF"), t.accent], startPoint: .top, endPoint: .bottom)
-        }
-    }
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(ringColor, lineWidth: 2)
-                .opacity(onAir ? 0.5 : 0.22)
+                .strokeBorder(ringColor, lineWidth: onAir ? 2 : 1.5)
                 .frame(width: diameter, height: diameter)
-            Circle()
-                .stroke(ringColor, lineWidth: 1.5)
-                .opacity(onAir ? 0.35 : 0.14)
-                .frame(width: 148 * scale, height: 148 * scale)
-            Circle()
-                .fill(grad)
-                .frame(width: 132 * scale, height: 132 * scale)
-                .shadow(color: inert ? .clear : (onAir ? t.red.opacity(0.53) : t.accent.opacity(0.27)), radius: 22)
-                .shadow(color: Color.black.opacity(0.35), radius: 15, y: 10)
-                .overlay(
-                    VStack(spacing: 5) {
-                        Image(systemName: inert ? "mic.slash.fill" : "mic.fill")
-                            .font(.system(size: 36 * scale, weight: .medium))
-                            .foregroundStyle(labelColor)
-                        Text(stateLabel)
-                            .font(.system(size: 11.5, weight: .heavy))
-                            .tracking(1.2)
-                            .foregroundStyle(labelColor)
-                    }
-                )
+            face
+                .shadow(color: onAir ? t.red.opacity(0.45) : .clear, radius: 18)
         }
+        // The gap between ring and face is part of the button.
+        .contentShape(Circle())
         .scaleEffect(onAir && !reduceMotion ? 0.97 : 1.0)
         .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.7), value: onAir)
         .accessibilityLabel(a11yLabel)
+    }
+
+    private var content: some View {
+        VStack(spacing: 4) {
+            Image(systemName: inert ? "mic.slash.fill" : "mic.fill")
+                .font(.system(size: 36 * scale, weight: .medium))
+                .foregroundStyle(glyphColor)
+            Text(stateLabel)
+                .font(.caption2.weight(.heavy))
+                .tracking(1.2)
+                .foregroundStyle(captionColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(width: faceSize, height: faceSize)
+    }
+
+    @ViewBuilder private var face: some View {
+        if #available(iOS 26, *) {
+            content.glassEffect(.regular.tint(glassTint), in: .circle)
+        } else {
+            content.background(solidFill, in: .circle)
+        }
     }
 }
 
 // MARK: - Slider row
 
-// Named slider: caption and trailing accessory (route picker, level) on
-// one line, the slider full width underneath.
+// Named slider: icon, caption and trailing accessory (route picker, level)
+// on one line, the slider full width underneath. The tint colors the icon
+// and the track so each row reads as its own control.
 private struct SliderRow<Content: View, Trailing: View>: View {
     @Environment(\.theme) var t
     var title: String
+    var icon: String
+    var tint: Color
     @ViewBuilder var slider: () -> Content
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(tint)
+                    .accessibilityHidden(true)
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(t.label2)
@@ -691,7 +596,7 @@ private struct SliderRow<Content: View, Trailing: View>: View {
                     .frame(height: 24)
             }
             slider()
-                .tint(t.accent)
+                .tint(tint)
         }
     }
 }
@@ -825,135 +730,24 @@ struct FreqReadout: View {
 
     var body: some View {
         HStack(alignment: .lastTextBaseline, spacing: 6) {
+            // Shrinks to fit rather than touching the screen edges; the unit
+            // keeps its size.
             Text(freq)
                 .font(.system(size: size, weight: .bold, design: .default).monospacedDigit())
                 .tracking(-1.5)
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
             Text("MHz")
                 .font(.system(size: size * 0.27, weight: .semibold))
                 .foregroundStyle(t.label2)
+                .lineLimit(1)
+                .fixedSize()
         }
-    }
-}
-
-// MARK: - Frequency numpad
-
-private struct FreqNumpad: View {
-    @Environment(\.theme) var t
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dismiss) var dismiss
-    @Bindable var store: RadioStore
-    var currentFreq: String
-
-    @State private var digits: String
-    @State private var hasEdited = false
-    @State private var rangeError: String?
-
-    private static let maxDigits = 7
-
-    init(store: RadioStore, currentFreq: String) {
-        self.store = store
-        self.currentFreq = currentFreq
-        _digits = State(initialValue: currentFreq.replacingOccurrences(of: ".", with: ""))
-    }
-
-    private var displayText: String {
-        let padded = digits + String(repeating: "0", count: max(0, 3 - digits.count))
-        let mhz = String(padded.prefix(3))
-        let khz = String(padded.dropFirst(3).prefix(3))
-        return "\(mhz).\(khz)"
-    }
-
-    // Any frequency the module tunes (from HELLO) is fine to receive on; TX
-    // is band-gated separately by the controller.
-    private func commit() {
-        guard let f = Float(displayText) else { return }
-        let lo = store.radio.minRadioFreq, hi = store.radio.maxRadioFreq
-        guard f >= lo && f <= hi else {
-            rangeError = String(format: "Out of range: %.3f–%.3f MHz", lo, hi)
-            return
-        }
-        store.sendRadioState(freq: f, ptt: false)
-        dismiss()
-    }
-
-    var body: some View {
-        ZStack {
-            t.bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                Spacer()
-
-                // Display
-                VStack(spacing: 2) {
-                    Text(displayText)
-                        .font(.system(size: 48, weight: .bold, design: .monospaced))
-                        .foregroundStyle(rangeError == nil ? t.label : t.red)
-                        .contentTransition(reduceMotion ? .identity : .numericText())
-                    Text(rangeError ?? "MHz")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(rangeError == nil ? t.label2 : t.red)
-                }
-                .padding(.top, 28)
-                .padding(.bottom, 28)
-
-                // Numpad
-                VStack(spacing: 10) {
-                    numpadRow(["1","2","3"])
-                    numpadRow(["4","5","6"])
-                    numpadRow(["7","8","9"])
-                    numpadRow([".","0","⌫"])
-                }
-                .padding(.horizontal, 28)
-
-                // Set
-                Button(action: commit) {
-                    Text("SET")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-                .glassProminentButtonStyle()
-                .controlSize(.large)
-                .tint(t.accent)
-                .padding(.horizontal, 28)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
-            }
-        }
-    }
-
-    private func numpadRow(_ keys: [String]) -> some View {
-        HStack(spacing: 10) {
-            ForEach(keys, id: \.self) { key in
-                Button {
-                    tap(key)
-                } label: {
-                    Text(key)
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundStyle(key == "⌫" ? t.label2 : t.label)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(t.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func tap(_ key: String) {
-        rangeError = nil
-        switch key {
-        case "⌫":
-            guard !digits.isEmpty else { return }
-            digits = String(digits.dropLast())
-            hasEdited = true
-        case ".":
-            break  // decimal is auto-placed — key kept for visual familiarity
-        default:
-            guard digits.count < Self.maxDigits else { return }
-            if !hasEdited { digits = ""; hasEdited = true }
-            digits.append(key)
-        }
+        // Digits have no ascenders or descenders, so the line box carries about
+        // 18pt of dead space top and bottom at 74pt; trim most of it.
+        .frame(height: size * 0.94)
+        .padding(.horizontal, 20)
     }
 }
 
@@ -962,6 +756,7 @@ private struct FreqNumpad: View {
 private struct ScanBody: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
+    @ScaledMetric(relativeTo: .largeTitle) private var emptyIconSize: CGFloat = 48
 
     private var scanList: [Memory] { store.scanList }
 
@@ -970,13 +765,13 @@ private struct ScanBody: View {
             VStack(spacing: 12) {
                 Spacer()
                 Image(systemName: "barcode.viewfinder")
-                    .font(.system(size: 48, weight: .thin))
+                    .font(.system(size: emptyIconSize, weight: .thin))
                     .foregroundStyle(t.label3)
                 Text("No scan channels")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(t.label)
                 Text("Add memories to build a scan list.")
-                    .font(.system(size: 14))
+                    .font(.subheadline)
                     .foregroundStyle(t.label2)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
@@ -988,10 +783,10 @@ private struct ScanBody: View {
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
                         Image(systemName: store.scanPaused ? "pause.circle.fill" : "barcode.viewfinder")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(store.scanPaused ? t.green : t.label2)
                         Text(store.scanPaused ? "PAUSED" : (store.isScanning ? "SCANNING" : "SCAN"))
-                            .font(.system(size: 12.5, weight: .bold))
+                            .font(.caption.weight(.bold))
                             .tracking(1)
                             .foregroundStyle(store.scanPaused ? t.green : t.label2)
                     }
@@ -1002,7 +797,7 @@ private struct ScanBody: View {
                 .padding(.vertical, 20)
 
                 Text("Scan list · \(scanList.count) channels")
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(t.label2)
                     .textCase(.uppercase)
                     .tracking(0.4)
@@ -1020,15 +815,15 @@ private struct ScanBody: View {
                                     .frame(width: 6, height: 6)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(mem.name)
-                                        .font(.system(size: 16, weight: .semibold))
+                                        .font(.callout.weight(.semibold))
                                         .foregroundStyle(active ? t.accent : t.label)
                                     Text(mem.group)
-                                        .font(.system(size: 12.5))
+                                        .font(.caption)
                                         .foregroundStyle(active ? t.accent.opacity(0.7) : t.label2)
                                 }
                                 Spacer()
                                 Text(mem.freqString)
-                                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                                    .font(.subheadline.weight(.semibold).monospacedDigit())
                                     .foregroundStyle(active ? t.accent : t.label2)
                             }
                             .padding(.horizontal, 16)
@@ -1048,7 +843,7 @@ private struct ScanBody: View {
                     HStack(spacing: 12) {
                         if store.scanPaused {
                             Text("Signal found")
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.footnote.weight(.semibold))
                                 .foregroundStyle(t.green)
                         }
                         Button { store.stopScan() } label: {
@@ -1075,162 +870,5 @@ private struct ScanBody: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Captions sheet
-
-struct CaptionsSheet: View {
-    @Environment(\.theme) var t
-    @Environment(\.dismiss) var dismiss
-    @Environment(\.openURL) private var openURL
-    @Bindable var store: RadioStore
-
-    private var isListening: Bool { store.captionsStatus == .listening }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Mini freq + LIVE badge
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(store.currentFreqString)
-                        .font(.system(size: 26, weight: .bold).monospacedDigit())
-                        .foregroundStyle(t.label)
-                    Text("Live transcription · on-device")
-                        .font(.system(size: 13))
-                        .foregroundStyle(t.label2)
-                }
-                Spacer()
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(isListening ? t.red : t.label3)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: isListening ? t.red : .clear, radius: 4)
-                    Text(isListening ? "LIVE" : "OFF")
-                        .font(.system(size: 12, weight: .heavy))
-                        .tracking(0.6)
-                        .foregroundStyle(isListening ? t.red : t.label2)
-                }
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(isListening ? t.redSoft : t.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 10)
-
-            // Transcript
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(store.captionLines) { line in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 8) {
-                                Text(line.callsign)
-                                    .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(line.active ? t.green : t.accent)
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(line.active ? t.greenSoft : t.accentSoft)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                                if !line.active {
-                                    Text(line.time)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(t.label3)
-                                } else {
-                                    HStack(spacing: 3) {
-                                        ForEach(0..<3, id: \.self) { i in
-                                            Circle()
-                                                .fill(t.green.opacity(1.0 - Double(i) * 0.35))
-                                                .frame(width: 4, height: 4)
-                                        }
-                                    }
-                                }
-                            }
-                            if line.active {
-                                Text(line.text)
-                                    .font(.system(size: 16.5))
-                                    .foregroundStyle(t.label2)
-                                    .italic()
-                                    .padding(.horizontal, 13)
-                            } else {
-                                Text(line.text)
-                                    .font(.system(size: 16.5))
-                                    .lineSpacing(4)
-                                    .foregroundStyle(t.label)
-                                    .padding(.horizontal, 13)
-                                    .padding(.vertical, 10)
-                                    .background(t.surface)
-                                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                            }
-                        }
-                    }
-                }
-                .padding(.bottom, 16)
-            }
-
-            if let message = store.captionsStatus.message(language: store.captionLanguage) {
-                statusPanel(message)
-            } else if store.captionLines.isEmpty {
-                Text("Waiting for audio…")
-                    .font(.system(size: 14))
-                    .foregroundStyle(t.label3)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 8)
-            }
-        }
-                .background(t.bg.ignoresSafeArea())
-        .navigationTitle("Voice")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    TranscriptLogView(store: store)
-                } label: {
-                    Label("Transcript log", systemImage: "list.bullet.rectangle")
-                }
-            }
-        }
-        .environment(\.theme, store.theme)
-        // Opening captions is the point of intent for the speech prompt.
-        .onAppear { store.requestCaptionsPermissionIfNeeded() }
-    }
-
-    // Why captions aren't running, plus the one action that fixes it.
-    private func statusPanel(_ message: String) -> some View {
-        VStack(spacing: 10) {
-            Text(message)
-                .font(.system(size: 14))
-                .foregroundStyle(t.label2)
-                .multilineTextAlignment(.center)
-            switch store.captionsStatus {
-            case .off:
-                statusButton("Turn On Live Captions") { store.liveCaptions = true }
-            case .needsPermission:
-                statusButton("Continue") {
-                    store.requestCaptionsPermissionIfNeeded()
-                }
-            case .denied:
-                statusButton("Open Settings") { openURL(CaptionsStatus.appSettingsURL) }
-            case .needsNewerOS, .restricted, .unavailable, .listening:
-                EmptyView()
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
-        .padding(.bottom, 12)
-    }
-
-    private func statusButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(t.accent)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(t.accentSoft)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
     }
 }

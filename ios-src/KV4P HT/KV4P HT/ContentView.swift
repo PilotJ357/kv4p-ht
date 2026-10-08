@@ -30,43 +30,57 @@ struct ContentView: View {
 
     private var theme: AppTheme { AppTheme.forMode(store.themeMode, systemColorScheme: systemColorScheme) }
 
+    // The iOS 26 glass tab bar draws unselected items in a vibrant white that
+    // ignores tint and UITabBarAppearance; pre-colored icons keep Night red.
+    // The titles stay system-colored — the bar drops any text color.
+    @ViewBuilder private func tabLabel(_ tab: Tab) -> some View {
+        // Original-mode images skip the bar's automatic .fill variant.
+        if theme.mode == .night,
+           let icon = (UIImage(systemName: tab.icon + ".fill") ?? UIImage(systemName: tab.icon))?
+            .withTintColor(UIColor(theme.label2), renderingMode: .alwaysOriginal) {
+            Label { Text(tab.label) } icon: { Image(uiImage: icon) }
+        } else {
+            Label(tab.label, systemImage: tab.icon)
+        }
+    }
+
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
                 VoiceView(store: store)
             }
-            .tabItem { Label(Tab.voice.label, systemImage: Tab.voice.icon) }
+            .tabItem { tabLabel(.voice) }
             .tag(Tab.voice)
 
             NavigationStack {
                 APRSView(store: store)
             }
-            .tabItem { Label(Tab.aprs.label, systemImage: Tab.aprs.icon) }
+            .tabItem { tabLabel(.aprs) }
             .tag(Tab.aprs)
 
             NavigationStack {
                 APRSMapView(store: store)
             }
-            .tabItem { Label(Tab.map.label, systemImage: Tab.map.icon) }
+            .tabItem { tabLabel(.map) }
             .tag(Tab.map)
 
             NavigationStack {
                 MemoriesView(store: store)
             }
-            .tabItem { Label(Tab.memories.label, systemImage: Tab.memories.icon) }
+            .tabItem { tabLabel(.memories) }
             .tag(Tab.memories)
 
             NavigationStack {
                 MoreView(store: store)
             }
-            .tabItem { Label(Tab.more.label, systemImage: Tab.more.icon) }
+            .tabItem { tabLabel(.more) }
             .tag(Tab.more)
         }
         .environment(\.theme, theme)
         .preferredColorScheme(store.themeMode == .system ? nil : (theme.isDark ? .dark : .light))
         .tint(theme.accent)
-        .onAppear { store.theme = theme }
-        .onChange(of: theme.mode) { _, _ in store.theme = theme }
+        .onAppear { store.theme = theme; NativeChrome.apply(theme) }
+        .onChange(of: theme.mode) { _, _ in store.theme = theme; NativeChrome.apply(theme) }
         .onChange(of: systemColorScheme) { _, _ in store.theme = theme }
         .onChange(of: store.pendingMapFocusID) { _, id in
             if id != nil { selectedTab = .map }

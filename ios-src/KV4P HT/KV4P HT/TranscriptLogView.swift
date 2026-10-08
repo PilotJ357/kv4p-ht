@@ -21,46 +21,55 @@ struct TranscriptLogView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12, pinnedViews: .sectionHeaders) {
-                if !store.saveTranscripts {
+        List {
+            if !store.saveTranscripts {
+                Section {
                     savingOffBanner
                 }
-                ForEach(days, id: \.day) { group in
-                    Section {
-                        ForEach(group.entries) { entry in
-                            TranscriptEntryRow(entry: entry, query: query)
-                                .contextMenu {
-                                    Button {
-                                        UIPasteboard.general.string = entry.text
-                                    } label: {
-                                        Label("Copy", systemImage: "doc.on.doc")
-                                    }
-                                    Button(role: .destructive) {
-                                        store.deleteTranscripts(ids: [entry.id])
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                        }
-                    } header: {
-                        Text(group.day.formatted(date: .complete, time: .omitted).uppercased())
-                            .font(.system(size: 12.5, weight: .medium))
-                            .tracking(0.4)
-                            .foregroundStyle(t.label2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 6)
-                            .background(t.bg)
-                    }
-                }
-                if results.isEmpty {
-                    emptyState
-                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            ForEach(days, id: \.day) { group in
+                Section {
+                    ForEach(group.entries) { entry in
+                        TranscriptEntryRow(entry: entry, query: query)
+                            .contextMenu {
+                                Button {
+                                    UIPasteboard.general.string = entry.text
+                                } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+                                Button(role: .destructive) {
+                                    store.deleteTranscripts(ids: [entry.id])
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                            .swipeActions {
+                                Button(role: .destructive) {
+                                    store.deleteTranscripts(ids: [entry.id])
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                    }
+                } header: {
+                    Text(group.day.formatted(date: .complete, time: .omitted))
+                        .foregroundStyle(t.label2)
+                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+            }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .background(t.bg.ignoresSafeArea())
+        .overlay {
+            if results.isEmpty {
+                emptyState
+                    .allowsHitTesting(false)  // don't cover the Turn On row
+            }
+        }
         .navigationTitle("Transcript log")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
@@ -70,7 +79,7 @@ struct TranscriptLogView: View {
                 ShareLink(item: TranscriptLog.exportText(results),
                           subject: Text("Pocket HT transcripts"),
                           preview: SharePreview("Transcripts (\(results.count) lines)")) {
-                    Image(systemName: "square.and.arrow.up")
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
                 .disabled(results.isEmpty)
                 Menu {
@@ -79,7 +88,7 @@ struct TranscriptLogView: View {
                     }
                     .disabled(store.transcriptLog.entries.isEmpty)
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Label("More", systemImage: "ellipsis.circle")
                 }
             }
         }
@@ -93,45 +102,33 @@ struct TranscriptLogView: View {
     }
 
     private var savingOffBanner: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             Text("Saving is off. New captions won't be added to the log.")
-                .font(.system(size: 14))
+                .font(.subheadline)
                 .foregroundStyle(t.label2)
-                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             Button("Turn On") { store.saveTranscripts = true }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(t.accent)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(t.accentSoft)
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-                .buttonStyle(.plain)
+                .glassButtonStyle()
+                .controlSize(.small)
+                .tint(t.accent)
         }
-        .padding(12)
-        .background(t.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.top, 8)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 6) {
-            Image(systemName: query.isEmpty ? "captions.bubble" : "magnifyingglass")
-                .font(.system(size: 28, weight: .regular))
-                .foregroundStyle(t.label3)
-            Text(query.isEmpty ? "No transcripts yet" : "No matches")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(t.label)
+        ContentUnavailableView {
+            Label {
+                Text(query.isEmpty ? "No transcripts yet" : "No matches")
+                    .foregroundStyle(t.label2)
+            } icon: {
+                Image(systemName: query.isEmpty ? "captions.bubble" : "magnifyingglass")
+                    .foregroundStyle(t.label3)
+            }
+        } description: {
             if query.isEmpty {
                 Text("Received transmissions captioned with Live captions are saved here while Save transcripts is on. Transcripts stay on this device.")
-                    .font(.system(size: 14))
-                    .foregroundStyle(t.label2)
-                    .multilineTextAlignment(.center)
+                    .foregroundStyle(t.label3)
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
-        .padding(.top, 48)
     }
 }
 
@@ -141,29 +138,27 @@ private struct TranscriptEntryRow: View {
     let query: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(entry.channelLabel)
-                    .font(.system(size: 12.5, weight: .bold, design: .monospaced))
+                    .font(.system(.caption, design: .monospaced, weight: .bold))
                     .foregroundStyle(t.accent)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(t.accentSoft)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 Text(entry.date.formatted(date: .omitted, time: .standard))
-                    .font(.system(size: 11.5, design: .monospaced))
+                    .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(t.label3)
             }
             Text(highlighted)
-                .font(.system(size: 16.5))
+                .font(.body)
                 .lineSpacing(4)
                 .foregroundStyle(t.label)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
-                .background(t.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     private var highlighted: AttributedString {

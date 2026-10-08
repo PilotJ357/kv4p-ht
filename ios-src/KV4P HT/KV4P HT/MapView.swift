@@ -90,24 +90,34 @@ struct APRSMapView: View {
         position = .userLocation(fallback: .automatic)
     }
 
+    private var stationMap: some View {
+        Map(position: $position) {
+            UserAnnotation()
+            ForEach(stations) { station in
+                Annotation(station.callsign, coordinate: station.coordinate) {
+                    pinButton(station)
+                }
+                // StationPin already draws the callsign chip.
+                .annotationTitles(.hidden)
+            }
+        }
+    }
+
+    private func pinButton(_ station: MapStation) -> some View {
+        Button {
+            selectedEntry = station.entry
+        } label: {
+            StationPin(station: station, isSelected: false)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .environment(\.theme, store.theme)
+    }
+
     var body: some View {
         ZStack {
-            Map(position: $position) {
-                UserAnnotation()
-                ForEach(stations) { station in
-                    Annotation(station.callsign, coordinate: station.coordinate) {
-                        Button {
-                            selectedEntry = station.entry
-                        } label: {
-                            StationPin(station: station, isSelected: false)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .environment(\.theme, store.theme)
-                    }
-                }
-            }
-            .ignoresSafeArea()
+            stationMap
+                .ignoresSafeArea()
 
             VStack {
                 Spacer()
@@ -115,10 +125,10 @@ struct APRSMapView: View {
                 if stations.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "map")
-                            .font(.system(size: 28))
+                            .font(.title)
                             .foregroundStyle(t.label2)
                         Text("No station positions heard yet")
-                            .font(.system(size: 15))
+                            .font(.subheadline)
                             .foregroundStyle(t.label2)
                     }
                     .padding(.horizontal, 16)
@@ -129,8 +139,9 @@ struct APRSMapView: View {
             }
         }
         .environment(\.theme, store.theme)
-        .navigationTitle("APRS Map")
+        .navigationTitle("Map")
         .navigationBarTitleDisplayMode(.inline)
+        .mapBarBackground()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: recenterOnUser) {
@@ -165,6 +176,21 @@ struct APRSMapView: View {
             .preferredColorScheme(store.theme.isDark ? .dark : .light)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+    }
+}
+
+// MARK: - Bar chrome
+
+private extension View {
+    // iOS 26: the map runs edge to edge under the floating glass toolbar, like
+    // Apple Maps. Before that there's no glass, so keep a blurred bar behind
+    // the title and button instead of letting them float over map labels.
+    @ViewBuilder func mapBarBackground() -> some View {
+        if #available(iOS 26, *) {
+            toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        } else {
+            toolbarBackgroundVisibility(.visible, for: .navigationBar)
         }
     }
 }
@@ -216,24 +242,26 @@ struct StationPin: View {
         VStack(spacing: 2) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(pinColor)
                 Text(station.callsign)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.caption2.weight(.bold).monospaced())
                     .foregroundStyle(t.label)
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(
                 RoundedRectangle(cornerRadius: 7)
-                    .fill(t.isDark ? Color(hex: "1C1C1E").opacity(0.92) : Color.white.opacity(0.96))
+                    .fill(t.surface.opacity(0.94))
                     .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
             )
+            // Pins stay readable at accessibility sizes without swallowing the map.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             Circle()
                 .fill(pinColor)
                 .frame(width: 10, height: 10)
                 .overlay(
-                    Circle().stroke(.white, lineWidth: 2)
+                    Circle().stroke(t.surface, lineWidth: 2)
                 )
                 .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
         }
