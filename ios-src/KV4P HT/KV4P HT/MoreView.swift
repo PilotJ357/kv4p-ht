@@ -144,8 +144,12 @@ struct SettingsView: View {
                 SettingsValueRow(title: "Band",
                                  value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–")
                 TxTimeoutRow(store: store)
+                TxBandLimitRows(store: store)
             } header: {
                 Text("Radio").foregroundStyle(t.label2)
+            } footer: {
+                Text("TX limits keep transmissions inside your region's amateur band. Defaults are the US plan.")
+                    .foregroundStyle(t.label2)
             }
             .settingsRowStyle(t)
 
@@ -282,6 +286,41 @@ private struct TxTimeoutRow: View {
                 .foregroundStyle(t.label2)
         }
         .pickerStyle(.menu)
+    }
+}
+
+// MARK: - TX band limit pickers
+
+// Only the connected module's band; both before HELLO.
+private struct TxBandLimitRows: View {
+    @Bindable var store: RadioStore
+
+    private var moduleType: UInt8? { store.ble.hello?.rfModuleType }
+
+    var body: some View {
+        if moduleType.map({ $0 == 0 }) ?? true {
+            limitRow("2 m TX min", $store.txMin2m, BandPlan.vhfMinOptions.filter { $0 < store.txMax2m })
+            limitRow("2 m TX max", $store.txMax2m, BandPlan.vhfMaxOptions.filter { $0 > store.txMin2m })
+        }
+        if moduleType.map({ $0 != 0 }) ?? true {
+            limitRow("70 cm TX min", $store.txMin70cm, BandPlan.uhfMinOptions.filter { $0 < store.txMax70cm })
+            limitRow("70 cm TX max", $store.txMax70cm, BandPlan.uhfMaxOptions.filter { $0 > store.txMin70cm })
+        }
+    }
+
+    private static func mhz(_ f: Float) -> String {
+        String(format: "%g MHz", f)
+    }
+
+    // Options can only produce min < max; a saved value outside the list
+    // still shows as the current one.
+    private func limitRow(_ title: String, _ value: Binding<Float>, _ options: [Float]) -> some View {
+        let all = options.contains(value.wrappedValue) ? options : options + [value.wrappedValue]
+        return PickerRow(title: title,
+                         selection: Binding(get: { "\(value.wrappedValue)" },
+                                            set: { s in Float(s).map { value.wrappedValue = $0 } }),
+                         options: all.sorted().map { "\($0)" },
+                         labels: all.sorted().map(Self.mhz))
     }
 }
 

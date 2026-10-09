@@ -366,6 +366,23 @@ class RadioStore {
     var txTimeoutSeconds: Int = TxTimeout.defaultSeconds {
         didSet { if !isInitializing { UserDefaults.standard.set(txTimeoutSeconds, forKey: Self.txTimeoutKey) } }
     }
+    // Amateur TX band edges in MHz (Android's min/max 2 m / 70 cm TX freq).
+    // Each change re-derives TX_ALLOWED in the controller.
+    var txMin2m: Float = TxBandLimits.defaults.vhfMin {
+        didSet { txBandLimitsChanged(Self.txMin2mKey, txMin2m) }
+    }
+    var txMax2m: Float = TxBandLimits.defaults.vhfMax {
+        didSet { txBandLimitsChanged(Self.txMax2mKey, txMax2m) }
+    }
+    var txMin70cm: Float = TxBandLimits.defaults.uhfMin {
+        didSet { txBandLimitsChanged(Self.txMin70cmKey, txMin70cm) }
+    }
+    var txMax70cm: Float = TxBandLimits.defaults.uhfMax {
+        didSet { txBandLimitsChanged(Self.txMax70cmKey, txMax70cm) }
+    }
+    var txBandLimits: TxBandLimits {
+        TxBandLimits(vhfMin: txMin2m, vhfMax: txMax2m, uhfMin: txMin70cm, uhfMax: txMax70cm)
+    }
     // Last PTT request pushed through sendRadioState.
     private(set) var voicePTTKeyed = false
     private var txTimeoutTask: Task<Void, Never>?
@@ -424,6 +441,7 @@ class RadioStore {
             txTimeoutSeconds = s
         }
         saveTranscripts = UserDefaults.standard.bool(forKey: Self.saveTranscriptsKey)
+        loadTxBandLimits()
         transcriptLog = TranscriptLog.load()
         isInitializing = false
         migrateAprsFrequencyIfNeeded(region: deviceRegion)
@@ -514,6 +532,34 @@ class RadioStore {
     private static let txLicenseAckKey = "txLicenseAcknowledged"
     private static let txTimeoutKey = "txTimeoutSeconds"
     private static let saveTranscriptsKey = "saveTranscripts"
+    // Android's AppSetting names.
+    static let txMin2mKey = "min2mTxFreq"
+    static let txMax2mKey = "max2mTxFreq"
+    static let txMin70cmKey = "min70cmTxFreq"
+    static let txMax70cmKey = "max70cmTxFreq"
+
+    private func loadTxBandLimits() {
+        let defaults = UserDefaults.standard
+        func load(_ key: String) -> Float? {
+            (defaults.object(forKey: key) as? NSNumber).map { $0.floatValue }
+        }
+        // Unordered pairs (hand-edited or stale) fall back per band.
+        if let lo = load(Self.txMin2mKey), let hi = load(Self.txMax2mKey), lo < hi {
+            txMin2m = lo
+            txMax2m = hi
+        }
+        if let lo = load(Self.txMin70cmKey), let hi = load(Self.txMax70cmKey), lo < hi {
+            txMin70cm = lo
+            txMax70cm = hi
+        }
+        radio.setTxBandLimits(txBandLimits)
+    }
+
+    private func txBandLimitsChanged(_ key: String, _ value: Float) {
+        guard !isInitializing else { return }
+        UserDefaults.standard.set(value, forKey: key)
+        radio.setTxBandLimits(txBandLimits)
+    }
 
     private struct APRSSettings: Codable {
         var callsign: String
@@ -798,7 +844,9 @@ class RadioStore {
         return !BandPlan.canTransmit(
             onFrequency: currentFreq + vfoOffset,
             bandwidth: bandwidth == 0 ? DRA818_25K : DRA818_12K5,
-            rfModuleType: hello.rfModuleType)
+            rfModuleType: hello.rfModuleType,
+            limits: txBandLimits,
+            moduleRange: hello.tuneRange)
     }
 
     // What a voice PTT press does right now. Demo Radio skips the mic and

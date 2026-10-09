@@ -332,6 +332,50 @@ struct RadioModuleControllerTests {
         #expect(!hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
     }
 
+    @Test func txBandLimitsChangeRederivesTxAllowed() {
+        // 146.52 is the US calling frequency but outside Region 1's 144–146.
+        let seed = makeDeviceState(freqTx: 146.52, freqRx: 146.52)
+        let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 0)
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        controller.pttDown()
+        #expect(hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
+        let count = sent.frames.count
+
+        var region1 = TxBandLimits.defaults
+        region1.vhfMax = 146
+        controller.setTxBandLimits(region1)
+        #expect(sent.frames.count == count + 1)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_PTT_REQUESTED))
+        #expect(!controller.canTransmit(onFrequency: 147.0))
+        #expect(controller.canTransmit(onFrequency: 145.5))
+
+        // Same limits again: nothing to send.
+        controller.setTxBandLimits(region1)
+        #expect(sent.frames.count == count + 1)
+
+        controller.setTxBandLimits(.defaults)
+        #expect(hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+    }
+
+    @Test func txBandLimitsSurviveReconnect() {
+        let (controller, _) = makeReadyController(rfModuleType: 1)
+        var region1 = TxBandLimits.defaults
+        region1.uhfMin = 430
+        region1.uhfMax = 440
+        controller.setTxBandLimits(region1)
+        controller.detachTransport()
+        let sent = SentFrames()
+        controller.attachTransport { sent.frames.append($0) }
+        let seed = makeDeviceState(freqTx: 446.0, freqRx: 446.0)
+        controller.seedFirmwareInfo(makeHello(rfModuleType: 1, deviceState: seed))
+        controller.seedFromDeviceState(seed)
+        controller.markTransportReady()
+        #expect(controller.txBandLimits == region1)
+        #expect(!hasFlag(sent.frames.last, HOST_STATE_TX_ALLOWED))
+        #expect(controller.canTransmit(onFrequency: 432.1))
+    }
+
     @Test func uhfModuleUsesSeventyCentimeterLimits() {
         let seed = makeDeviceState(freqTx: 446.0, freqRx: 446.0)
         let (controller, sent) = makeReadyController(seed: seed, rfModuleType: 1)
