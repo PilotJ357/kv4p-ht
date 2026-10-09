@@ -81,21 +81,29 @@ struct BattGlyph: View {
 
 struct SMeter: View {
     @Environment(\.theme) var t
-    var level: Int     // 0-9
-    var max: Int = 9
+    var level: Int     // 0-13, see SMeterScale
+    var max: Int = SMeterScale.maxBars
+    var tx: Bool = false
     var active: Bool = true
     var rawRSSI: UInt8 = 0
     @State private var showRSSI = false
+
+    // S1–S9 green, over-S9 amber, overload red; every lit bar red in TX.
+    private func color(bar i: Int) -> Color {
+        if tx { return t.red }
+        if i >= SMeterScale.overloadBar - 1 { return t.red }
+        if i >= SMeterScale.s9Bar { return t.amber }
+        return t.green
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 3) {
             ForEach(0..<max, id: \.self) { i in
                 let on = active && i < level
                 let h: CGFloat = 8 + CGFloat(i) / CGFloat(max - 1) * 18
-                let col: Color = i >= 6 ? t.red : i >= 4 ? t.amber : t.green
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(on ? col : t.meterTrack)
-                    .frame(width: 6, height: h)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(on ? color(bar: i) : t.meterTrack)
+                    .frame(width: 5, height: h)
                     .animation(.easeOut(duration: 0.15), value: on)
             }
             if showRSSI {
@@ -106,9 +114,13 @@ struct SMeter: View {
             }
         }
         .frame(height: 26)
+        .contentShape(Rectangle())
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.2)) { showRSSI.toggle() }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("S-meter")
+        .accessibilityValue(SMeterScale.description(bars: active ? level : 0, tx: tx))
     }
 }
 

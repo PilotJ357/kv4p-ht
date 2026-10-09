@@ -756,10 +756,9 @@ class RadioStore {
 
     // Firmware reports RSSI in RX and TX audio level in TX through the same
     // field (full-scale TX audio ≈ 90), so the meter follows both.
+    // RSSI in RX, TX audio level in TX; see SMeterScale.
     var signalLevel: Int {
-        guard let ds = ble.deviceState, ds.rssi > 0 else { return 0 }
-        let result = 9.73 * log(0.0297 * Double(ds.rssi)) - 1.88
-        return max(1, min(9, Int(result.rounded())))
+        SMeterScale.bars(rssi: ble.deviceState?.rssi ?? 0)
     }
 
     var rawRSSI: UInt8 {
