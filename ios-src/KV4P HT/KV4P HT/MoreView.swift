@@ -319,18 +319,6 @@ private struct BandwidthRow: View {
 private struct SquelchSliderRow: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
-    @State private var isDragging = false
-
-    // Drags send the level to the radio once, on release; other changes
-    // (VoiceOver adjustments) send it immediately.
-    private var level: Binding<Double> {
-        Binding(
-            get: { Double(store.squelch) },
-            set: {
-                store.squelch = UInt8($0.rounded())
-                if !isDragging { store.radio.setSquelch(store.squelch) }
-            })
-    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -342,12 +330,8 @@ private struct SquelchSliderRow: View {
                     .font(.body.monospacedDigit())
                     .foregroundStyle(t.label2)
             }
-            Slider(value: level, in: 0...9, step: 1, onEditingChanged: { editing in
-                isDragging = editing
-                if !editing { store.radio.setSquelch(store.squelch) }
-            })
-            .tint(t.accent)
-            .accessibilityLabel("Squelch")
+            SquelchSlider(store: store)
+                .tint(t.accent)
         }
         .padding(.vertical, 6)
     }

@@ -183,7 +183,6 @@ private struct RadioStage: View {
     var modeLabel:    String
     var freqEditable: Bool = false
     var layout:       StageLayout = .regular
-    @State private var squelchDragging = false
 
     private var compact: Bool { layout == .compact }
 
@@ -462,23 +461,7 @@ private struct RadioStage: View {
             // Amber and a dial icon set it apart from Volume (in Night the two
             // tints are close, so the icon carries the difference).
             SliderRow(title: "Squelch", icon: "dial.medium.fill", tint: t.amber) {
-                // Drags send the level to the radio once, on release (per-tick
-                // writes made the thumb bounce); VoiceOver adjustments send it immediately.
-                Slider(
-                    value: Binding(
-                        get: { Double(store.squelch) },
-                        set: {
-                            store.squelch = UInt8($0.rounded())
-                            if !squelchDragging { store.radio.setSquelch(store.squelch) }
-                        }
-                    ),
-                    in: 0...9, step: 1
-                ) { editing in
-                    squelchDragging = editing
-                    if !editing { store.radio.setSquelch(store.squelch) }
-                }
-                .accessibilityLabel("Squelch")
-                .accessibilityValue("\(store.squelch)")
+                SquelchSlider(store: store)
             } trailing: {
                 Text("Level \(store.squelch)")
                     .font(.subheadline.monospacedDigit())
