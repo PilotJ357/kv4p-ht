@@ -366,6 +366,24 @@ class RadioStore {
     var txTimeoutSeconds: Int = TxTimeout.defaultSeconds {
         didSet { if !isInitializing { UserDefaults.standard.set(txTimeoutSeconds, forKey: Self.txTimeoutKey) } }
     }
+    // Amateur TX band plan. A preset fills txBandLimits; .custom keeps the
+    // current edges for the user to edit.
+    var txBandPlan: TxBandPlan = .unitedStates {
+        didSet {
+            guard !isInitializing else { return }
+            UserDefaults.standard.set(txBandPlan.rawValue, forKey: Self.txBandPlanKey)
+            if let limits = txBandPlan.limits { txBandLimits = limits }
+        }
+    }
+    // Amateur TX band edges in MHz (Android's min/max 2 m / 70 cm TX freq).
+    // Each change re-derives TX_ALLOWED in the controller.
+    var txBandLimits: TxBandLimits = .defaults {
+        didSet {
+            guard !isInitializing, txBandLimits != oldValue else { return }
+            saveTxBandLimits()
+            radio.setTxBandLimits(txBandLimits)
+        }
+    }
     // Last PTT request pushed through sendRadioState.
     private(set) var voicePTTKeyed = false
     private var txTimeoutTask: Task<Void, Never>?
@@ -424,6 +442,7 @@ class RadioStore {
             txTimeoutSeconds = s
         }
         saveTranscripts = UserDefaults.standard.bool(forKey: Self.saveTranscriptsKey)
+        loadTxBandPlan(region: deviceRegion)
         transcriptLog = TranscriptLog.load()
         isInitializing = false
         migrateAprsFrequencyIfNeeded(region: deviceRegion)
@@ -514,6 +533,75 @@ class RadioStore {
     private static let txLicenseAckKey = "txLicenseAcknowledged"
     private static let txTimeoutKey = "txTimeoutSeconds"
     private static let saveTranscriptsKey = "saveTranscripts"
+    private static let txBandPlanKey = "txBandPlan"
+    // Android's AppSetting names.
+    private static let txMin2mKey = "min2mTxFreq"
+    private static let txMax2mKey = "max2mTxFreq"
+    private static let txMin70cmKey = "min70cmTxFreq"
+    private static let txMax70cmKey = "max70cmTxFreq"
+
+    private func loadTxBandPlan(region: String?) {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.string(forKey: Self.txBandPlanKey), let plan = TxBandPlan(rawValue: raw) {
+            txBandPlan = plan
+        } else {
+            // Nothing saved: start on the device region's plan, and persist
+            // it so a later region change doesn't move it silently.
+            txBandPlan = TxBandPlan.defaultPlan(forRegion: region)
+            defaults.set(txBandPlan.rawValue, forKey: Self.txBandPlanKey)
+        }
+        if let limits = txBandPlan.limits {
+            txBandLimits = limits
+        } else {
+            func load(_ key: String) -> Float? {
+                (defaults.object(forKey: key) as? NSNumber).map { $0.floatValue }
+            }
+            // Unordered pairs (hand-edited or stale) fall back per band.
+            if let lo = load(Self.txMin2mKey), let hi = load(Self.txMax2mKey), lo < hi {
+                txBandLimits.vhfMin = lo
+                txBandLimits.vhfMax = hi
+            }
+            if let lo = load(Self.txMin70cmKey), let hi = load(Self.txMax70cmKey), lo < hi {
+                txBandLimits.uhfMin = lo
+                txBandLimits.uhfMax = hi
+            }
+        }
+        saveTxBandLimits()
+        radio.setTxBandLimits(txBandLimits)
+    }
+
+    private func saveTxBandLimits() {
+        let defaults = UserDefaults.standard
+        defaults.set(txBandLimits.vhfMin, forKey: Self.txMin2mKey)
+        defaults.set(txBandLimits.vhfMax, forKey: Self.txMax2mKey)
+        defaults.set(txBandLimits.uhfMin, forKey: Self.txMin70cmKey)
+        defaults.set(txBandLimits.uhfMax, forKey: Self.txMax70cmKey)
+    }
+
+    /// Module range custom edges are checked against: HELLO's once
+    /// connected, else the nominal SA818 range.
+    func customTxRange(rfModuleType: UInt8) -> ClosedRange<Float> {
+        ble.hello.flatMap { $0.rfModuleType == rfModuleType ? $0.tuneRange : nil }
+            ?? BandPlan.nominalModuleRange(rfModuleType: rfModuleType)
+    }
+
+    /// Sets one custom band's edges; false (nothing saved) if they're
+    /// unordered or outside the module's tuning range.
+    @discardableResult
+    func setCustomTxBand(rfModuleType: UInt8, min: Float, max: Float) -> Bool {
+        guard txBandPlan == .custom,
+              BandPlan.isValidCustomBand(min: min, max: max,
+                                         moduleRange: customTxRange(rfModuleType: rfModuleType))
+        else { return false }
+        if rfModuleType == 0 {
+            txBandLimits.vhfMin = min
+            txBandLimits.vhfMax = max
+        } else {
+            txBandLimits.uhfMin = min
+            txBandLimits.uhfMax = max
+        }
+        return true
+    }
 
     private struct APRSSettings: Codable {
         var callsign: String
@@ -798,7 +886,9 @@ class RadioStore {
         return !BandPlan.canTransmit(
             onFrequency: currentFreq + vfoOffset,
             bandwidth: bandwidth == 0 ? DRA818_25K : DRA818_12K5,
-            rfModuleType: hello.rfModuleType)
+            rfModuleType: hello.rfModuleType,
+            limits: txBandLimits,
+            moduleRange: hello.tuneRange)
     }
 
     // What a voice PTT press does right now. Demo Radio skips the mic and

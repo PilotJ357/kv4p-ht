@@ -101,6 +101,12 @@ struct SettingsView: View {
         store.captionsStatus == .needsNewerOS ? .constant(false) : $store.liveCaptions
     }
 
+    private var txBandPlanFooter: String {
+        let base = "PTT and APRS only transmit inside these limits. Pick your country's plan."
+        guard store.txBandPlan == .custom else { return base }
+        return base + " Custom limits must fall within the radio's tuning range; you're responsible for staying inside your license."
+    }
+
     private func openAppSettings() {
         openURL(CaptionsStatus.appSettingsURL)
     }
@@ -146,6 +152,16 @@ struct SettingsView: View {
                 TxTimeoutRow(store: store)
             } header: {
                 Text("Radio").foregroundStyle(t.label2)
+            }
+            .settingsRowStyle(t)
+
+            // TX band plan
+            Section {
+                TxBandPlanRows(store: store)
+            } header: {
+                Text("TX band plan").foregroundStyle(t.label2)
+            } footer: {
+                Text(txBandPlanFooter).foregroundStyle(t.label2)
             }
             .settingsRowStyle(t)
 
@@ -282,6 +298,139 @@ private struct TxTimeoutRow: View {
                 .foregroundStyle(t.label2)
         }
         .pickerStyle(.menu)
+    }
+}
+
+// MARK: - TX band plan
+
+// Plan picker plus the edges in effect: read-only for a preset, editable for
+// Custom. Only the connected module's band; both before HELLO.
+private struct TxBandPlanRows: View {
+    @Environment(\.theme) var t
+    @Bindable var store: RadioStore
+
+    private var moduleTypes: [UInt8] {
+        store.ble.hello.map { [$0.rfModuleType == 0 ? 0 : 1] } ?? [0, 1]
+    }
+
+    var body: some View {
+        Picker(selection: $store.txBandPlan) {
+            ForEach(TxBandPlan.allCases) { plan in
+                Text(plan.label).tag(plan)
+            }
+        } label: {
+            Text("Region")
+                .foregroundStyle(t.label)
+        } currentValueLabel: {
+            Text(store.txBandPlan.label)
+                .foregroundStyle(t.label2)
+        }
+        .pickerStyle(.menu)
+
+        ForEach(moduleTypes, id: \.self) { type in
+            if store.txBandPlan == .custom {
+                CustomTxBandRows(store: store, rfModuleType: type)
+            } else {
+                let b = store.txBandLimits.bounds(rfModuleType: type)
+                SettingsValueRow(title: "\(TxBandText.name(type)) TX",
+                                 value: TxBandText.range(b.min, b.max) + " MHz")
+            }
+        }
+    }
+}
+
+private enum TxBandText {
+    static func name(_ rfModuleType: UInt8) -> String {
+        rfModuleType == 0 ? "2 m" : "70 cm"
+    }
+
+    // Up to 4 decimals (12.5 kHz steps), trailing zeros dropped.
+    static func mhz(_ f: Float) -> String {
+        var s = String(format: "%.4f", f)
+        while s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s
+    }
+
+    static func range(_ lo: Float, _ hi: Float) -> String {
+        "\(mhz(lo))–\(mhz(hi))"
+    }
+}
+
+// One band's custom edges. Committed as a pair when editing ends, so either
+// edge can move past the other's old value; a bad pair reverts and says why.
+private struct CustomTxBandRows: View {
+    @Environment(\.theme) var t
+    @Bindable var store: RadioStore
+    let rfModuleType: UInt8
+    @State private var minText = ""
+    @State private var maxText = ""
+    @State private var rejected = false
+    @FocusState private var focused: Edge?
+
+    private enum Edge { case min, max }
+
+    private var name: String { TxBandText.name(rfModuleType) }
+    private var range: ClosedRange<Float> { store.customTxRange(rfModuleType: rfModuleType) }
+
+    var body: some View {
+        field("\(name) TX min", $minText, .min)
+            .onAppear(perform: reset)
+            .onChange(of: focused) { _, now in
+                if now == nil { commit() }
+            }
+        field("\(name) TX max", $maxText, .max)
+        if rejected {
+            Text("Min must be below max, both within \(TxBandText.range(range.lowerBound, range.upperBound)) MHz.")
+                .font(.footnote)
+                .foregroundStyle(t.red)
+        }
+    }
+
+    private func field(_ title: String, _ text: Binding<String>, _ edge: Edge) -> some View {
+        LabeledContent {
+            HStack(spacing: 6) {
+                TextField(title, text: text)
+                    .keyboardType(.decimalPad)
+                    .focused($focused, equals: edge)
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(t.label2)
+                    .multilineTextAlignment(.trailing)
+                Text("MHz")
+                    .foregroundStyle(t.label2)
+            }
+        } label: {
+            Text(title)
+                .foregroundStyle(t.label)
+        }
+        .toolbar {
+            // The decimal pad has no return key.
+            if focused == edge {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focused = nil }
+                }
+            }
+        }
+    }
+
+    private func commit() {
+        // Decimal pads type a comma in comma-decimal locales.
+        func parse(_ s: String) -> Float? {
+            Float(s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
+        }
+        if let lo = parse(minText), let hi = parse(maxText) {
+            rejected = !store.setCustomTxBand(rfModuleType: rfModuleType, min: lo, max: hi)
+        } else {
+            rejected = true
+        }
+        reset()
+    }
+
+    private func reset() {
+        let b = store.txBandLimits.bounds(rfModuleType: rfModuleType)
+        minText = TxBandText.mhz(b.min)
+        maxText = TxBandText.mhz(b.max)
     }
 }
 

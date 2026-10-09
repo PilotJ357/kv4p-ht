@@ -13,7 +13,8 @@ import Foundation
 ///
 /// TX_ALLOWED is derived here, not set by callers: every desired-state change
 /// re-checks the TX frequency and bandwidth against `BandPlan` for the HELLO
-/// module type (Android calls `updateTxAllowed` on each tune instead).
+/// module type and the user's TX band limits (Android calls `updateTxAllowed`
+/// on each tune and from `updateTxLimitsForBand` instead).
 ///
 /// Thread-safe: setters may be called from the main thread while transport
 /// callbacks arrive on bleQueue. The injected send callback is invoked while
@@ -45,6 +46,7 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
 
     private var send: ((HostDesiredState) -> Void)?
     private var firmwareInfo: HelloFrame?
+    private var _txBandLimits = TxBandLimits.defaults
     private var _desiredState = RadioModuleController.initialDesiredState
     private var updateDepth = 0
     private var lastDesiredStateSent: HostDesiredState?
@@ -105,6 +107,21 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
             desiredStateRetries = 0
             // Firmware persists TX_ALLOWED in NVS; re-derive it for this tune.
             applyTxPolicy(&_desiredState)
+        }
+    }
+
+    // MARK: - TX band limits
+
+    var txBandLimits: TxBandLimits {
+        withLock { _txBandLimits }
+    }
+
+    /// New band edges re-derive TX_ALLOWED for the current tune right away.
+    func setTxBandLimits(_ limits: TxBandLimits) {
+        withLock {
+            guard limits != _txBandLimits else { return }
+            _txBandLimits = limits
+            updateDesiredState { _ in }
         }
     }
 
@@ -389,7 +406,9 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     private func canTransmit(onFrequency freq: Float, bandwidth: UInt8) -> Bool {
         guard let firmwareInfo else { return false }
         return BandPlan.canTransmit(onFrequency: freq, bandwidth: bandwidth,
-                                    rfModuleType: firmwareInfo.rfModuleType)
+                                    rfModuleType: firmwareInfo.rfModuleType,
+                                    limits: _txBandLimits,
+                                    moduleRange: firmwareInfo.tuneRange)
     }
 
     // Firmware gates PTT and AX.25 TX on TX_ALLOWED alone. Dropping it also

@@ -4,15 +4,20 @@ import Testing
 private let vhf: UInt8 = 0
 private let uhf: UInt8 = 1
 
-private func canTx(_ freq: Float, _ bw: UInt8 = DRA818_25K, module: UInt8 = vhf) -> Bool {
-    BandPlan.canTransmit(onFrequency: freq, bandwidth: bw, rfModuleType: module)
+private func canTx(_ freq: Float, _ bw: UInt8 = DRA818_25K, module: UInt8 = vhf,
+                   limits: TxBandLimits = .defaults, moduleRange: ClosedRange<Float>? = nil) -> Bool {
+    BandPlan.canTransmit(onFrequency: freq, bandwidth: bw, rfModuleType: module,
+                         limits: limits, moduleRange: moduleRange)
 }
+
+private let region1 = TxBandLimits(vhfMin: 144, vhfMax: 146, uhfMin: 430, uhfMax: 440)
 
 struct BandPlanTests {
 
     @Test func defaultsMatchAndroid() {
         #expect(BandPlan.txLimits(rfModuleType: vhf) == 144.0...148.0)
         #expect(BandPlan.txLimits(rfModuleType: uhf) == 420.0...450.0)
+        #expect(TxBandLimits.defaults == TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 420, uhfMax: 450))
         #expect(BandPlan.halfBandwidthMhz(DRA818_25K) == 0.0125)
         #expect(BandPlan.halfBandwidthMhz(DRA818_12K5) == 0.00625)
     }
@@ -73,5 +78,113 @@ struct BandPlanTests {
         #expect(!canTx(462.5625, module: uhf))  // FRS/GMRS
         #expect(!canTx(146.52, module: uhf))
         #expect(!canTx(446.0, module: vhf))
+    }
+
+    @Test func presetLimits() {
+        // 2 m: ITU Region 1 144–146, Regions 2/3 144–148 (Japan and India
+        // 144–146). 70 cm: US 420–450; Canada, Australia 430–450; ITU 430–440.
+        #expect(TxBandPlan.unitedStates.limits == .defaults)
+        #expect(TxBandPlan.canadaAustralia.limits == TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 450))
+        #expect(TxBandPlan.ituRegion23.limits == TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 440))
+        #expect(TxBandPlan.ituRegion1.limits == region1)
+        #expect(TxBandPlan.japanIndia.limits == region1)
+        #expect(TxBandPlan.custom.limits == nil)
+        // Rawvalues are persisted.
+        #expect(Set(TxBandPlan.allCases.map(\.rawValue)).count == TxBandPlan.allCases.count)
+        #expect(TxBandPlan(rawValue: "itu-r1") == .ituRegion1)
+    }
+
+    @Test func defaultPlanForRegion() {
+        #expect(TxBandPlan.defaultPlan(forRegion: nil) == .unitedStates)
+        #expect(TxBandPlan.defaultPlan(forRegion: "") == .unitedStates)
+        for c in ["US", "us", "PR", "GU", "VI", "TT"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .unitedStates, "\(c)")
+        }
+        for c in ["CA", "AU"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .canadaAustralia, "\(c)")
+        }
+        for c in ["JP", "IN"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .japanIndia, "\(c)")
+        }
+        // Europe, Africa, Western and Central Asia, Mongolia.
+        for c in ["GB", "DE", "RU", "UA", "ZA", "EG", "NG", "TR", "IL", "SA", "AE", "GE", "KZ", "MN"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .ituRegion1, "\(c)")
+        }
+        // Everything else: the ITU Region 2/3 allocation.
+        for c in ["NZ", "CN", "KR", "TH", "BR", "MX", "AR", "IR"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .ituRegion23, "\(c)")
+        }
+    }
+
+    @Test func customBandValidation() {
+        let vhf = BandPlan.nominalVhfRange
+        #expect(BandPlan.isValidCustomBand(min: 144, max: 146, moduleRange: vhf))
+        #expect(BandPlan.isValidCustomBand(min: 134, max: 174, moduleRange: vhf))  // module edges
+        #expect(BandPlan.isValidCustomBand(min: 144.5, max: 145.5, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 146, max: 144, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 146, max: 146, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 133.9, max: 146, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 144, max: 174.1, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 430, max: 440, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: .nan, max: 146, moduleRange: vhf))
+        #expect(BandPlan.isValidCustomBand(min: 430, max: 440, moduleRange: BandPlan.nominalUhfRange))
+        #expect(BandPlan.nominalModuleRange(rfModuleType: 0) == vhf)
+        #expect(BandPlan.nominalModuleRange(rfModuleType: 1) == BandPlan.nominalUhfRange)
+    }
+
+    @Test func region1Limits() {
+        #expect(canTx(145.5, limits: region1))
+        #expect(canTx(145.9875, limits: region1))
+        #expect(!canTx(145.988, limits: region1))
+        #expect(!canTx(146.52, limits: region1))   // US calling freq
+        #expect(!canTx(147.0, limits: region1))
+        #expect(canTx(433.5, module: uhf, limits: region1))
+        #expect(canTx(430.0125, module: uhf, limits: region1))
+        #expect(!canTx(430.0, module: uhf, limits: region1))
+        #expect(!canTx(425.0, module: uhf, limits: region1))
+        #expect(!canTx(446.0, module: uhf, limits: region1))  // PMR446
+        #expect(BandPlan.txLimits(rfModuleType: vhf, limits: region1) == 144.0...146.0)
+        #expect(BandPlan.txLimits(rfModuleType: uhf, limits: region1) == 430.0...440.0)
+    }
+
+    @Test func unorderedLimitsBlockTx() {
+        let flipped = TxBandLimits(vhfMin: 148, vhfMax: 144, uhfMin: 440, uhfMax: 440)
+        #expect(BandPlan.txLimits(rfModuleType: vhf, limits: flipped) == nil)
+        #expect(BandPlan.txLimits(rfModuleType: uhf, limits: flipped) == nil)
+        #expect(!canTx(146.0, limits: flipped))
+        #expect(!canTx(440.0, module: uhf, limits: flipped))
+        let nan = TxBandLimits(vhfMin: .nan, vhfMax: 148, uhfMin: 420, uhfMax: .infinity)
+        #expect(!canTx(146.0, limits: nan))
+        #expect(!canTx(446.0, module: uhf, limits: nan))
+    }
+
+    @Test func limitsClampToModuleRange() {
+        // A module that stops short of the band edge narrows the TX band.
+        #expect(BandPlan.txLimits(rfModuleType: vhf, moduleRange: 134...147) == 144.0...147.0)
+        #expect(canTx(146.9875, moduleRange: 134...147))
+        #expect(!canTx(147.5, moduleRange: 134...147))
+        #expect(BandPlan.txLimits(rfModuleType: uhf, moduleRange: 425...480) == 425.0...450.0)
+        #expect(!canTx(424.0, module: uhf, moduleRange: 425...480))
+        // Band entirely outside the module's range: no TX.
+        #expect(BandPlan.txLimits(rfModuleType: vhf, moduleRange: 150...174) == nil)
+        #expect(!canTx(146.0, moduleRange: 150...174))
+        // Real SA818 ranges don't trim the defaults.
+        #expect(BandPlan.txLimits(rfModuleType: vhf, moduleRange: 134...174) == 144.0...148.0)
+        #expect(BandPlan.txLimits(rfModuleType: uhf, moduleRange: 400...480) == 420.0...450.0)
+    }
+
+    @Test func helloTuneRange() {
+        let ds = DeviceStateFrame(
+            appliedSequence: 0, memoryId: -1, flags: 0, bw: DRA818_25K, freqTx: 0, freqRx: 0,
+            ctcssTx: 0, squelch: 0, ctcssRx: 0, radioModuleStatus: RADIO_STATUS_FOUND,
+            mode: 1, lastError: 0, rssi: 0)
+        func hello(_ lo: Float, _ hi: Float) -> HelloFrame {
+            HelloFrame(firmwareVersion: 17, radioModuleFound: true, windowSize: 1024,
+                       rfModuleType: 0, minFreq: lo, maxFreq: hi, features: 0, deviceState: ds)
+        }
+        #expect(hello(134, 174).tuneRange == 134.0...174.0)
+        #expect(hello(0, 0).tuneRange == nil)
+        #expect(hello(174, 134).tuneRange == nil)
+        #expect(hello(.nan, 174).tuneRange == nil)
     }
 }
