@@ -366,6 +366,13 @@ class RadioStore {
     var txTimeoutSeconds: Int = TxTimeout.defaultSeconds {
         didSet { if !isInitializing { UserDefaults.standard.set(txTimeoutSeconds, forKey: Self.txTimeoutKey) } }
     }
+    // Voice TX mic gain boost; APRS/AFSK TX is unaffected.
+    var micGainBoost: MicGainBoost = .none {
+        didSet {
+            ble.setMicGain(micGainBoost.gain)
+            if !isInitializing { UserDefaults.standard.set(micGainBoost.rawValue, forKey: Self.micGainBoostKey) }
+        }
+    }
     // Last PTT request pushed through sendRadioState.
     private(set) var voicePTTKeyed = false
     private var txTimeoutTask: Task<Void, Never>?
@@ -424,6 +431,9 @@ class RadioStore {
             txTimeoutSeconds = s
         }
         saveTranscripts = UserDefaults.standard.bool(forKey: Self.saveTranscriptsKey)
+        if let raw = UserDefaults.standard.string(forKey: Self.micGainBoostKey) {
+            micGainBoost = MicGainBoost.parse(raw)
+        }
         transcriptLog = TranscriptLog.load()
         isInitializing = false
         migrateAprsFrequencyIfNeeded(region: deviceRegion)
@@ -514,6 +524,7 @@ class RadioStore {
     private static let txLicenseAckKey = "txLicenseAcknowledged"
     private static let txTimeoutKey = "txTimeoutSeconds"
     private static let saveTranscriptsKey = "saveTranscripts"
+    private static let micGainBoostKey = "micGainBoost"
 
     private struct APRSSettings: Codable {
         var callsign: String

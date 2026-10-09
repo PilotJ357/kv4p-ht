@@ -101,6 +101,11 @@ struct SettingsView: View {
         store.captionsStatus == .needsNewerOS ? .constant(false) : $store.liveCaptions
     }
 
+    private var micGainBinding: Binding<String> {
+        Binding(get: { store.micGainBoost.rawValue },
+                set: { store.micGainBoost = MicGainBoost.parse($0) })
+    }
+
     private func openAppSettings() {
         openURL(CaptionsStatus.appSettingsURL)
     }
@@ -144,6 +149,9 @@ struct SettingsView: View {
                 SettingsValueRow(title: "Band",
                                  value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–")
                 TxTimeoutRow(store: store)
+                PickerRow(title: "Mic gain boost",
+                          selection: micGainBinding,
+                          options: MicGainBoost.allCases.map(\.rawValue))
             } header: {
                 Text("Radio").foregroundStyle(t.label2)
             }
