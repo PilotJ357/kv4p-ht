@@ -80,33 +80,56 @@ struct BandPlanTests {
         #expect(!canTx(446.0, module: vhf))
     }
 
-    @Test func androidOptionsIncludeDefaultsAndOrder() {
-        let d = TxBandLimits.defaults
-        #expect(BandPlan.vhfMinOptions.contains(d.vhfMin))
-        #expect(BandPlan.vhfMaxOptions.contains(d.vhfMax))
-        #expect(BandPlan.uhfMinOptions.contains(d.uhfMin))
-        #expect(BandPlan.uhfMaxOptions.contains(d.uhfMax))
-        // Every min/max pick is a valid band.
-        for lo in BandPlan.vhfMinOptions { for hi in BandPlan.vhfMaxOptions { #expect(lo < hi) } }
-        for lo in BandPlan.uhfMinOptions { for hi in BandPlan.uhfMaxOptions { #expect(lo < hi) } }
+    @Test func presetLimits() {
+        // 2 m: ITU Region 1 144–146, Regions 2/3 144–148 (Japan and India
+        // 144–146). 70 cm: US 420–450; Canada, Australia 430–450; ITU 430–440.
+        #expect(TxBandPlan.unitedStates.limits == .defaults)
+        #expect(TxBandPlan.canadaAustralia.limits == TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 450))
+        #expect(TxBandPlan.ituRegion23.limits == TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 440))
+        #expect(TxBandPlan.ituRegion1.limits == region1)
+        #expect(TxBandPlan.japanIndia.limits == region1)
+        #expect(TxBandPlan.custom.limits == nil)
+        // Rawvalues are persisted.
+        #expect(Set(TxBandPlan.allCases.map(\.rawValue)).count == TxBandPlan.allCases.count)
+        #expect(TxBandPlan(rawValue: "itu-r1") == .ituRegion1)
     }
 
-    @Test func optionsCoverNationalPlans() {
-        // 2 m: ITU Region 1 144–146, Regions 2/3 144–148 (Japan and India
-        // 144–146). 70 cm: US 420–450; Canada, Australia 430–450;
-        // Region 1, Japan, India, NZ 430–440.
-        let plans: [(String, TxBandLimits)] = [
-            ("US", TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 420, uhfMax: 450)),
-            ("Canada/Australia", TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 450)),
-            ("NZ", TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 440)),
-            ("Region 1/Japan/India", region1),
-        ]
-        for (name, p) in plans {
-            #expect(BandPlan.vhfMinOptions.contains(p.vhfMin), "\(name)")
-            #expect(BandPlan.vhfMaxOptions.contains(p.vhfMax), "\(name)")
-            #expect(BandPlan.uhfMinOptions.contains(p.uhfMin), "\(name)")
-            #expect(BandPlan.uhfMaxOptions.contains(p.uhfMax), "\(name)")
+    @Test func defaultPlanForRegion() {
+        #expect(TxBandPlan.defaultPlan(forRegion: nil) == .unitedStates)
+        #expect(TxBandPlan.defaultPlan(forRegion: "") == .unitedStates)
+        for c in ["US", "us", "PR", "GU", "VI", "TT"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .unitedStates, "\(c)")
         }
+        for c in ["CA", "AU"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .canadaAustralia, "\(c)")
+        }
+        for c in ["JP", "IN"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .japanIndia, "\(c)")
+        }
+        // Europe, Africa, Western and Central Asia, Mongolia.
+        for c in ["GB", "DE", "RU", "UA", "ZA", "EG", "NG", "TR", "IL", "SA", "AE", "GE", "KZ", "MN"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .ituRegion1, "\(c)")
+        }
+        // Everything else: the ITU Region 2/3 allocation.
+        for c in ["NZ", "CN", "KR", "TH", "BR", "MX", "AR", "IR"] {
+            #expect(TxBandPlan.defaultPlan(forRegion: c) == .ituRegion23, "\(c)")
+        }
+    }
+
+    @Test func customBandValidation() {
+        let vhf = BandPlan.nominalVhfRange
+        #expect(BandPlan.isValidCustomBand(min: 144, max: 146, moduleRange: vhf))
+        #expect(BandPlan.isValidCustomBand(min: 134, max: 174, moduleRange: vhf))  // module edges
+        #expect(BandPlan.isValidCustomBand(min: 144.5, max: 145.5, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 146, max: 144, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 146, max: 146, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 133.9, max: 146, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 144, max: 174.1, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: 430, max: 440, moduleRange: vhf))
+        #expect(!BandPlan.isValidCustomBand(min: .nan, max: 146, moduleRange: vhf))
+        #expect(BandPlan.isValidCustomBand(min: 430, max: 440, moduleRange: BandPlan.nominalUhfRange))
+        #expect(BandPlan.nominalModuleRange(rfModuleType: 0) == vhf)
+        #expect(BandPlan.nominalModuleRange(rfModuleType: 1) == BandPlan.nominalUhfRange)
     }
 
     @Test func region1Limits() {

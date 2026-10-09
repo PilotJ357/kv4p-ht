@@ -19,6 +19,70 @@ nonisolated struct TxBandLimits: Equatable, Sendable {
     }
 }
 
+/// Amateur TX band plan presets. ITU: 2 m is 144–146 in Region 1 and 144–148
+/// in Regions 2 and 3; 70 cm is 430–440 everywhere, with national extensions
+/// (US 420–450; Canada, Australia 430–450 since 2013). Japan and India stop
+/// at 146 on 2 m. Android offers the same edges as four separate dropdowns.
+nonisolated enum TxBandPlan: String, CaseIterable, Identifiable, Sendable {
+    case unitedStates = "us"
+    case canadaAustralia = "ca-au"
+    case ituRegion23 = "itu-r23"
+    case ituRegion1 = "itu-r1"
+    case japanIndia = "jp-in"
+    case custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .unitedStates:    "United States"
+        case .canadaAustralia: "Canada, Australia"
+        case .ituRegion23:     "Other Americas, Asia, Pacific"
+        case .ituRegion1:      "Europe, Africa, Middle East"
+        case .japanIndia:      "Japan, India"
+        case .custom:          "Custom"
+        }
+    }
+
+    /// nil for `.custom`, whose edges the user enters.
+    var limits: TxBandLimits? {
+        switch self {
+        case .unitedStates:    .defaults
+        case .canadaAustralia: TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 450)
+        case .ituRegion23:     TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 440)
+        case .ituRegion1, .japanIndia:
+                               TxBandLimits(vhfMin: 144, vhfMax: 146, uhfMin: 430, uhfMax: 440)
+        case .custom:          nil
+        }
+    }
+
+    // US territories, plus Trinidad and Tobago (also 420–450).
+    private static let usPlanRegions: Set<String> = ["US", "PR", "GU", "VI", "AS", "MP", "UM", "TT"]
+
+    /// First-launch plan for the device region (ISO 3166 code). ITU Region 1
+    /// is Europe, Africa, Western and Central Asia, and Mongolia; any other
+    /// region gets the ITU Region 2/3 allocation, which is narrower than the
+    /// US plan on 70 cm. No region: the US plan, like Android.
+    static func defaultPlan(forRegion code: String?) -> TxBandPlan {
+        guard let code = code?.uppercased(), !code.isEmpty else { return .unitedStates }
+        switch code {
+        case let c where usPlanRegions.contains(c): return .unitedStates
+        case "CA", "AU": return .canadaAustralia
+        case "JP", "IN": return .japanIndia
+        case "MN": return .ituRegion1
+        default: break
+        }
+        let region = Locale.Region(code)
+        let continent = region.continent?.identifier
+        let subregion = region.containingRegion?.identifier
+        if continent == "150" || continent == "002"            // Europe, Africa
+            || subregion == "145" || subregion == "143" {  // Western, Central Asia
+            return .ituRegion1
+        }
+        return .ituRegion23
+    }
+}
+
 /// Amateur-band transmit policy (port of Android's
 /// `RadioAudioService.canTransmitOnFrequency`).
 ///
@@ -27,14 +91,20 @@ nonisolated struct TxBandLimits: Equatable, Sendable {
 /// AX.25 TX only on the host's TX_ALLOWED flag, so this is what keeps
 /// transmissions inside the band. Receiving anywhere the module tunes is fine.
 nonisolated enum BandPlan {
-    // Android's SettingsActivity dropdown values. ITU: 2 m is 144–146 in
-    // Region 1, 144–148 in Regions 2 and 3; 70 cm is 430–440 everywhere, with
-    // national extensions (US 420–450; Canada, Australia 430–450). Some
-    // Region 3 countries stop at 146 on 2 m (Japan, India).
-    static let vhfMinOptions: [Float] = [144]
-    static let vhfMaxOptions: [Float] = [146, 148]
-    static let uhfMinOptions: [Float] = [420, 430]
-    static let uhfMaxOptions: [Float] = [440, 450]
+    // SA818 tuning ranges, for checking custom limits before HELLO says
+    // which module (and exact range) is attached.
+    static let nominalVhfRange: ClosedRange<Float> = 134...174
+    static let nominalUhfRange: ClosedRange<Float> = 400...480
+
+    static func nominalModuleRange(rfModuleType: UInt8) -> ClosedRange<Float> {
+        rfModuleType == 0 ? nominalVhfRange : nominalUhfRange
+    }
+
+    /// Custom TX edges must be ordered and inside what the module can tune.
+    static func isValidCustomBand(min: Float, max: Float, moduleRange: ClosedRange<Float>) -> Bool {
+        min.isFinite && max.isFinite && min < max
+            && moduleRange.contains(min) && moduleRange.contains(max)
+    }
 
     /// The module's TX band, clamped to its HELLO tuning range. nil (no TX)
     /// when the limits are unordered or miss the module's range entirely.
