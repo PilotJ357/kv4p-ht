@@ -148,7 +148,7 @@ struct SettingsView: View {
             } header: {
                 Text("Radio").foregroundStyle(t.label2)
             } footer: {
-                Text("TX limits keep transmissions inside your region's amateur band. Defaults are the US plan.")
+                Text("TX limits keep transmissions inside your country's amateur bands. Defaults are the US plan (144–148, 420–450 MHz). Europe and Africa: 144–146, 430–440.")
                     .foregroundStyle(t.label2)
             }
             .settingsRowStyle(t)

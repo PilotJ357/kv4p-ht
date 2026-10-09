@@ -91,6 +91,24 @@ struct BandPlanTests {
         for lo in BandPlan.uhfMinOptions { for hi in BandPlan.uhfMaxOptions { #expect(lo < hi) } }
     }
 
+    @Test func optionsCoverNationalPlans() {
+        // 2 m: ITU Region 1 144–146, Regions 2/3 144–148 (Japan and India
+        // 144–146). 70 cm: US 420–450; Canada, Australia 430–450;
+        // Region 1, Japan, India, NZ 430–440.
+        let plans: [(String, TxBandLimits)] = [
+            ("US", TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 420, uhfMax: 450)),
+            ("Canada/Australia", TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 450)),
+            ("NZ", TxBandLimits(vhfMin: 144, vhfMax: 148, uhfMin: 430, uhfMax: 440)),
+            ("Region 1/Japan/India", region1),
+        ]
+        for (name, p) in plans {
+            #expect(BandPlan.vhfMinOptions.contains(p.vhfMin), "\(name)")
+            #expect(BandPlan.vhfMaxOptions.contains(p.vhfMax), "\(name)")
+            #expect(BandPlan.uhfMinOptions.contains(p.uhfMin), "\(name)")
+            #expect(BandPlan.uhfMaxOptions.contains(p.uhfMax), "\(name)")
+        }
+    }
+
     @Test func region1Limits() {
         #expect(canTx(145.5, limits: region1))
         #expect(canTx(145.9875, limits: region1))

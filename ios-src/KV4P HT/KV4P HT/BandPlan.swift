@@ -27,8 +27,10 @@ nonisolated struct TxBandLimits: Equatable, Sendable {
 /// AX.25 TX only on the host's TX_ALLOWED flag, so this is what keeps
 /// transmissions inside the band. Receiving anywhere the module tunes is fine.
 nonisolated enum BandPlan {
-    // Android's SettingsActivity dropdown values. US/Region 2 is 144–148 and
-    // 420–450; Region 1 and much of Region 3 stop at 146 and 430–440.
+    // Android's SettingsActivity dropdown values. ITU: 2 m is 144–146 in
+    // Region 1, 144–148 in Regions 2 and 3; 70 cm is 430–440 everywhere, with
+    // national extensions (US 420–450; Canada, Australia 430–450). Some
+    // Region 3 countries stop at 146 on 2 m (Japan, India).
     static let vhfMinOptions: [Float] = [144]
     static let vhfMaxOptions: [Float] = [146, 148]
     static let uhfMinOptions: [Float] = [420, 430]
