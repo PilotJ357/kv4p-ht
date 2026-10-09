@@ -218,6 +218,7 @@ struct AddMemoryView: View {
     @State private var freqText = ""
     @State private var offsetText = "0"
     @State private var toneValue: Float = 0
+    @State private var rxToneValue: Float = 0
     @State private var scanEnabled = true
     @State private var bandwidth: UInt8 = 0
 
@@ -230,12 +231,13 @@ struct AddMemoryView: View {
             _freqText = State(initialValue: m.freqString)
             _offsetText = State(initialValue: m.offset == 0 ? "0" : String(format: "%.3f", m.offset))
             _toneValue = State(initialValue: m.plTone)
+            _rxToneValue = State(initialValue: m.rxTone)
             _scanEnabled = State(initialValue: m.scanEnabled)
             _bandwidth = State(initialValue: m.bandwidth)
         }
     }
 
-    private let tones: [Float] = [0, 67.0, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9, 114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 162.2, 167.9, 173.8, 179.9, 186.2, 192.8, 203.5]
+    private let tones: [Float] = [0] + CTCSS_TONES
 
     // Save is disabled until this parses, rather than silently doing nothing.
     private var isValid: Bool { (Float(freqText) ?? 0) > 0 }
@@ -249,6 +251,7 @@ struct AddMemoryView: View {
             updated.freq = freq
             updated.offset = offset
             updated.plTone = toneValue
+            updated.rxTone = rxToneValue
             updated.isRepeater = offset != 0
             updated.scanEnabled = scanEnabled
             updated.bandwidth = bandwidth
@@ -256,12 +259,31 @@ struct AddMemoryView: View {
         } else {
             store.memories.append(Memory(
                 name: name, group: group, freq: freq, offset: offset,
-                plTone: toneValue, squelch: 2,
+                plTone: toneValue, rxTone: rxToneValue, squelch: 2,
                 isRepeater: offset != 0, scanEnabled: scanEnabled,
                 bandwidth: bandwidth
             ))
         }
         dismiss()
+    }
+
+    private func toneStepper(_ label: String, value: Binding<Float>) -> some View {
+        Stepper(
+            onIncrement: {
+                if let idx = tones.firstIndex(of: value.wrappedValue), idx < tones.count - 1 { value.wrappedValue = tones[idx + 1] }
+            },
+            onDecrement: {
+                if let idx = tones.firstIndex(of: value.wrappedValue), idx > 0 { value.wrappedValue = tones[idx - 1] }
+            }
+        ) {
+            LabeledContent {
+                Text(value.wrappedValue == 0 ? "Off" : String(format: "%.1f Hz", value.wrappedValue))
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(t.label)
+            } label: {
+                Text(label).foregroundStyle(t.label)
+            }
+        }
     }
 
     var body: some View {
@@ -280,26 +302,12 @@ struct AddMemoryView: View {
                     FieldRow(label: "Frequency", value: $freqText, mono: true, keyboard: .decimalPad)
                     // numbersAndPunctuation, not decimalPad: offsets can be negative.
                     FieldRow(label: "Offset",    value: $offsetText, mono: true, keyboard: .numbersAndPunctuation)
-                    Stepper(
-                        onIncrement: {
-                            if let idx = tones.firstIndex(of: toneValue), idx < tones.count - 1 { toneValue = tones[idx + 1] }
-                        },
-                        onDecrement: {
-                            if let idx = tones.firstIndex(of: toneValue), idx > 0 { toneValue = tones[idx - 1] }
-                        }
-                    ) {
-                        LabeledContent {
-                            Text(toneValue == 0 ? "Off" : String(format: "%.1f Hz", toneValue))
-                                .font(.system(.body, design: .monospaced, weight: .semibold))
-                                .foregroundStyle(t.label)
-                        } label: {
-                            Text("Tone (PL)").foregroundStyle(t.label)
-                        }
-                    }
+                    toneStepper("TX Tone", value: $toneValue)
+                    toneStepper("RX Tone", value: $rxToneValue)
                 } header: {
                     Text("Frequency").foregroundStyle(t.label2)
                 } footer: {
-                    Text("In MHz. Offset is signed (for example -0.600); 0 means simplex.")
+                    Text("In MHz. Offset is signed (for example -0.600); 0 means simplex. RX Tone mutes receive unless the signal carries it.")
                         .foregroundStyle(t.label2)
                 }
                 .listRowBackground(t.surface)

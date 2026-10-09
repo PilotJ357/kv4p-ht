@@ -10,6 +10,7 @@ struct MemoryCodingTests {
         """
         let mem = try JSONDecoder().decode(Memory.self, from: Data(json.utf8))
         #expect(mem.bandwidth == 0)
+        #expect(mem.rxTone == 0)
         #expect(mem.scanEnabled)
         #expect(!mem.aprsRegionLinked)
     }
@@ -32,5 +33,14 @@ struct MemoryCodingTests {
                          squelch: 2, isRepeater: false, bandwidth: 1)
         let decoded = try JSONDecoder().decode(Memory.self, from: JSONEncoder().encode(mem))
         #expect(decoded.bandwidth == 1)
+    }
+
+    // #124: RX tone squelch is stored per memory, like Android's rx_tone.
+    @Test func rxToneRoundTrips() throws {
+        let mem = Memory(name: "Rptr", group: "G", freq: 146.94, offset: -0.6, plTone: 100,
+                         rxTone: 107.2, squelch: 2, isRepeater: true)
+        let decoded = try JSONDecoder().decode(Memory.self, from: JSONEncoder().encode(mem))
+        #expect(decoded.rxTone == 107.2)
+        #expect(decoded.toneString == "100.0/107.2")
     }
 }

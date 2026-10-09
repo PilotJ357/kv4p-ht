@@ -21,7 +21,8 @@ struct Memory: Identifiable, Codable {
     var group: String
     var freq: Float
     var offset: Float      // MHz, 0 = simplex
-    var plTone: Float      // Hz, 0 = no tone
+    var plTone: Float      // TX tone Hz, 0 = no tone
+    var rxTone: Float = 0  // RX tone squelch Hz, 0 = off
     var squelch: UInt8
     var isRepeater: Bool
     var notes: String = ""
@@ -35,7 +36,9 @@ struct Memory: Identifiable, Codable {
         if offset == 0 { return "Simplex" }
         return offset > 0 ? String(format: "+%.3f", offset) : String(format: "%.3f", offset)
     }
-    var toneString: String { plTone == 0 ? "Off" : String(format: "PL %.1f", plTone) }
+    var toneString: String {
+        RadioStore.toneString(tx: ctcssIndex(for: plTone), rx: ctcssIndex(for: rxTone))
+    }
     var metaString: String {
         if isRepeater { return "Repeater · \(offsetString) · \(toneString)" }
         return "Simplex · \(notes.isEmpty ? "Simplex" : notes)"
@@ -44,7 +47,7 @@ struct Memory: Identifiable, Codable {
 }
 
 extension Memory {
-    // Custom decode so memories saved before scanEnabled/bandwidth existed still load.
+    // Custom decode so memories saved before rxTone/scanEnabled/bandwidth existed still load.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -53,6 +56,7 @@ extension Memory {
         freq = try c.decode(Float.self, forKey: .freq)
         offset = try c.decode(Float.self, forKey: .offset)
         plTone = try c.decode(Float.self, forKey: .plTone)
+        rxTone = try c.decodeIfPresent(Float.self, forKey: .rxTone) ?? 0
         squelch = try c.decode(UInt8.self, forKey: .squelch)
         isRepeater = try c.decode(Bool.self, forKey: .isRepeater)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
@@ -1119,8 +1123,7 @@ class RadioStore {
         radio.beginUpdate()
         vfoOffset = mem.offset
         vfoToneIndex = ctcssIndex(for: mem.plTone)
-        // Memories carry no RX tone; don't drag tone squelch onto them.
-        vfoRxToneIndex = 0
+        vfoRxToneIndex = ctcssIndex(for: mem.rxTone)
         bandwidth = mem.bandwidth
         sendRadioState(freq: mem.freq)
         radio.endUpdate()
