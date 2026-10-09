@@ -373,6 +373,12 @@ actor AudioManager {
         //     if rxFrameLog % 100 == 0 { rxPeakMax = 0 }
         // }
         guard playing, data.count >= 5 else { return }
+        // A lost BLE notification can drop a KISS FEND and glue two frames
+        // together; anything past one wire frame would overrun pcmDecodeBuf.
+        guard 1 + (data.count - 4) * 2 <= pcmDecodeBuf.count else {
+            print("[AudioManager] dropping oversized ADPCM frame: \(data.count)B")
+            return
+        }
         if ringBuffer.available >= Self.softMaxSamples { return }
 
         let predictor = Int32(Int16(bitPattern: UInt16(data[0]) | (UInt16(data[1]) << 8)))
