@@ -55,6 +55,11 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         audio.onDecodedSamples = handler
     }
 
+    /// Voice TX mic gain (MicGainBoost), applied before ADPCM encode.
+    func setMicGain(_ gain: Float) {
+        audio.setMicGain(gain)
+    }
+
     /// Open/close the phone-side software squelch gate on RX playback.
     func setRxAudioMuted(_ on: Bool) {
         audio.setRxMuted(on)

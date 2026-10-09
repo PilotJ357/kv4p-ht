@@ -204,6 +204,9 @@ actor AudioManager {
     nonisolated(unsafe) private var txResampleRatio: Float = 1.0
     nonisolated(unsafe) private var txResamplePhase: Float = 0.0
     nonisolated(unsafe) private var micTapInstalled = false
+    // Voice TX mic gain (MicGainBoost). Written from any thread, read on the
+    // tap thread; a stale read only lasts one buffer.
+    nonisolated(unsafe) private var txMicGain: Float = 1.0
 
     var isPlaying: Bool { playing }
 
@@ -356,6 +359,10 @@ actor AudioManager {
     /// far, keeping the gate in step with the jitter buffer. Any thread.
     nonisolated func setRxMuted(_ on: Bool) {
         ringBuffer.setMuted(on)
+    }
+
+    nonisolated func setMicGain(_ gain: Float) {
+        txMicGain = gain
     }
 
     nonisolated func takeRxStats() -> (peak: Float, clips: Int) {
@@ -534,6 +541,7 @@ actor AudioManager {
         }
         let ratio = txResampleRatio
         guard ratio > 0 else { return }
+        let gain = txMicGain
 
         if ratio == 1.0 {
             var offset = 0
@@ -541,8 +549,7 @@ actor AudioManager {
                 let space = Self.adpcmSamplesPerFrame - txAccumCount
                 let chunk = min(space, frameCount - offset)
                 for i in 0..<chunk {
-                    let s = max(-1.0, min(1.0, floatData[offset + i]))
-                    txAccumBuf[txAccumCount + i] = Int16(s * 32767.0)
+                    txAccumBuf[txAccumCount + i] = MicGainBoost.pcm16(floatData[offset + i], gain: gain)
                 }
                 txAccumCount += chunk
                 offset += chunk
@@ -556,8 +563,7 @@ actor AudioManager {
                 phase += ratio
                 while phase >= 1.0 && txAccumCount < Self.adpcmSamplesPerFrame {
                     phase -= 1.0
-                    let s = max(-1.0, min(1.0, floatData[i]))
-                    txAccumBuf[txAccumCount] = Int16(s * 32767.0)
+                    txAccumBuf[txAccumCount] = MicGainBoost.pcm16(floatData[i], gain: gain)
                     txAccumCount += 1
                     if txAccumCount == Self.adpcmSamplesPerFrame {
                         flushTxAccum()
