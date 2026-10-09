@@ -31,7 +31,7 @@ struct SquelchSlider: View {
                 dragValue = Double(store.squelch)
             } else {
                 dragValue = nil
-                store.radio.setSquelch(store.squelch)
+                store.radio.setSquelch(store.effectiveSquelch)
             }
         }
         .accessibilityLabel("Squelch")
@@ -47,6 +47,6 @@ struct SquelchSlider: View {
 
     private func set(_ level: UInt8) {
         store.squelch = level
-        store.radio.setSquelch(level)
+        store.radio.setSquelch(store.effectiveSquelch)
     }
 }
