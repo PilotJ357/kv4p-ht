@@ -217,7 +217,7 @@ class RadioStore {
     // Set while a beacon is out on its own simplex frequency: the applied
     // state then describes that channel, not the VFO, so it must not
     // overwrite vfoOffset/vfoToneIndex before the restore (#56).
-    @ObservationIgnored private var isSimplexFrequencySwitchActive = false
+    @ObservationIgnored private(set) var isSimplexFrequencySwitchActive = false
     var captionsEnabled: Bool = false
     var isScanning: Bool = false
     var scanIndex: Int = 0
@@ -286,6 +286,15 @@ class RadioStore {
     }
     var aprsPositionApprox: Bool = false {
         didSet { if !isInitializing { saveAprsSettings() } }
+    }
+    // Fill-in digipeater (WIDE1-1 and our own callsign); off by default.
+    var aprsDigipeatEnabled: Bool = false {
+        didSet {
+            if !isInitializing {
+                saveAprsSettings()
+                aprs.resetDigipeater()
+            }
+        }
     }
     var silenceRxOnAprsFreq: Bool = false {
         didSet {
@@ -526,6 +535,7 @@ class RadioStore {
         var silenceRxOnAprsFreq: Bool = false
         var beaconConsented: Bool?
         var beaconInterruptRx: Bool?
+        var digipeat: Bool?
     }
 
     // False when nothing has been saved yet.
@@ -543,6 +553,7 @@ class RadioStore {
         aprsBeaconInterruptRx = s.beaconInterruptRx ?? true
         aprsPositionApprox = s.positionApprox
         silenceRxOnAprsFreq = s.silenceRxOnAprsFreq
+        aprsDigipeatEnabled = s.digipeat ?? false
         return true
     }
 
@@ -552,7 +563,7 @@ class RadioStore {
             beaconEnabled: aprsBeaconEnabled, beaconIntervalMin: aprsBeaconIntervalMin,
             beaconFrequency: aprsBeaconFrequency, positionApprox: aprsPositionApprox,
             silenceRxOnAprsFreq: silenceRxOnAprsFreq, beaconConsented: aprsBeaconConsented,
-            beaconInterruptRx: aprsBeaconInterruptRx)
+            beaconInterruptRx: aprsBeaconInterruptRx, digipeat: aprsDigipeatEnabled)
         guard let data = try? JSONEncoder().encode(s) else { return }
         UserDefaults.standard.set(data, forKey: Self.aprsSettingsKey)
     }

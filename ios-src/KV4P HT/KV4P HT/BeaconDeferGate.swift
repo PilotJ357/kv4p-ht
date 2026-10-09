@@ -21,9 +21,16 @@ nonisolated struct BeaconDeferGate {
 
     private(set) var pending = false
 
+    // The channel-busy rule, shared with the digipeater (which never
+    // interrupts reception): wait while squelch is open.
+    static func mustWait(interruptReception: Bool, squelched: Bool) -> Bool {
+        !interruptReception && !squelched
+    }
+
     mutating func evaluate(_ trigger: Trigger, interruptReception: Bool,
                            squelched: Bool) -> Action {
-        let mustWait = !interruptReception && !squelched
+        let mustWait = Self.mustWait(interruptReception: interruptReception,
+                                     squelched: squelched)
         switch trigger {
         case .manual:
             // A manual beacon satisfies any held one.
