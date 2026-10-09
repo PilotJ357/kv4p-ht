@@ -191,8 +191,19 @@ class RadioStore {
             if !isInitializing && !isApplyingDeviceStateToUI {
                 UserDefaults.standard.set(Int(squelch), forKey: Self.squelchKey)
                 ble.setRxAudioMuted(effectiveRxMuted)
+                // The user picked a level mid-scan: keep theirs at stop.
+                scanRestoreSquelch = nil
             }
         }
+    }
+    // Squelch 0 bypasses the firmware soft squelch (always open), which
+    // would pin scan to its first channel. Scan runs at least this level and
+    // puts the user's 0 back on stop, like Android.
+    static let scanFallbackSquelch: UInt8 = 7
+    @ObservationIgnored private var scanRestoreSquelch: UInt8?
+    // Level sent to the radio.
+    var effectiveSquelch: UInt8 {
+        isScanning && squelch == 0 ? Self.scanFallbackSquelch : squelch
     }
     // Desired VFO channel config; survives without a memory match. Seeded
     // from firmware-applied state on connect and from memory tunes.
@@ -207,6 +218,7 @@ class RadioStore {
     var scanIndex: Int = 0
     var scanPaused: Bool = false
     @ObservationIgnored private var scanTimer: Timer?
+    @ObservationIgnored private var scanGate = ScanDwellGate()
 
     // ── Memories
     private static let memoriesKey = "savedMemories"
@@ -978,20 +990,34 @@ class RadioStore {
         isScanning = true
         scanPaused = false
         scanIndex = 0
+        scanRestoreSquelch = squelch == 0 ? 0 : nil
         tuneToScanIndex()
         scheduleScanTick()
     }
 
     func stopScan() {
+        let wasScanning = isScanning
         isScanning = false
         scanPaused = false
         scanTimer?.invalidate()
         scanTimer = nil
+        scanGate.reset()
+        guard wasScanning else { return }
+        // Put back the level scan raised, or the one the user moved the
+        // slider to while scan was holding the radio at the fallback.
+        if let restore = scanRestoreSquelch {
+            squelch = restore
+        }
+        if radio.desiredSquelch != squelch {
+            radio.setSquelch(squelch)
+        }
     }
 
+    // Polls the dwell gate; it works off deadlines, so ticks only need to be
+    // short next to its 0.5 s dwell.
     private func scheduleScanTick() {
         scanTimer?.invalidate()
-        scanTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        scanTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             DispatchQueue.main.async { self?.scanTick() }
         }
     }
@@ -999,16 +1025,12 @@ class RadioStore {
     private func scanTick() {
         let list = scanList
         guard isScanning, !list.isEmpty else { return }
-
-        if !isSquelched {
-            scanPaused = true
-            return
-        }
-
-        if scanPaused {
-            scanPaused = false
-        }
-
+        let ds = ble.deviceState
+        let active = !isSquelched || ds?.mode == 0 || voicePTTKeyed
+        let decision = scanGate.update(appliedRxFreq: ds?.freqRx, active: active, now: Date())
+        let paused = decision == .hold
+        if scanPaused != paused { scanPaused = paused }
+        guard decision == .advance else { return }
         scanIndex = (scanIndex + 1) % list.count
         tuneToScanIndex()
     }
@@ -1016,7 +1038,9 @@ class RadioStore {
     private func tuneToScanIndex() {
         let list = scanList
         guard scanIndex < list.count else { return }
-        applyMemory(list[scanIndex])
+        let mem = list[scanIndex]
+        scanGate.tuned(to: mem.freq, now: Date())
+        applyMemory(mem)
     }
 
     func updateMemory(_ memory: Memory) {
@@ -1052,7 +1076,7 @@ class RadioStore {
         radio.beginUpdate()
         radio.setTxFrequency(txFreq)
         radio.setRxFrequency(rxFreq)
-        radio.setSquelch(squelch)
+        radio.setSquelch(effectiveSquelch)
         radio.setBandwidth(bandwidth == 0 ? DRA818_25K : DRA818_12K5)
         radio.setTxTone(simplexOverride ? 0 : vfoToneIndex)
         radio.setFilters(highpass: filterHighPass, lowpass: filterLowPass)
