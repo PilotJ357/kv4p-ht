@@ -139,8 +139,10 @@ nonisolated final class DemoRadio: @unchecked Sendable {
         var flags = desired.flags
         if tx { flags |= DEVICE_STATE_TX_ACTIVE }
         if !tx && !open { flags |= DEVICE_STATE_SQUELCHED }
-        let rssi: UInt8 = tx ? 0
-            : carrierPresent ? UInt8.random(in: 70...130)
+        // TX: fake mic level (firmware full scale 90). RX carrier: S8–S9+40,
+        // below the overload bar (SMeterScale).
+        let rssi: UInt8 = tx ? UInt8.random(in: 65...90)
+            : carrierPresent ? UInt8.random(in: 55...95)
             : UInt8.random(in: 22...34)
         return DeviceStateFrame(
             appliedSequence: desired.sequence, memoryId: desired.memoryId,

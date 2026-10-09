@@ -373,7 +373,7 @@ private struct RadioStage: View {
             .padding(.top, 2)
 
             HStack(spacing: 14) {
-                SMeter(level: store.signalLevel, rawRSSI: store.rawRSSI)
+                SMeter(level: store.signalLevel, tx: store.rxMode == .tx, rawRSSI: store.rawRSSI)
                 RxBadge(state: rxState)
             }
             .padding(.top, 6)
@@ -808,7 +808,7 @@ private struct ScanBody: View {
                             .foregroundStyle(store.scanPaused ? t.green : t.label2)
                     }
                     FreqReadout(freq: store.currentFreqString, size: 60)
-                    SMeter(level: store.signalLevel, rawRSSI: store.rawRSSI)
+                    SMeter(level: store.signalLevel, tx: store.rxMode == .tx, rawRSSI: store.rawRSSI)
                 }
                 .padding(.vertical, 20)
 
