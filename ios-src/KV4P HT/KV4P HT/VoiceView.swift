@@ -624,8 +624,10 @@ private struct SystemVolumeView: UIViewRepresentable {
     private final class SliderOnly: MPVolumeView {
         // PTT flips the session category (.playback ↔ .playAndRecord), and
         // the slider tracks the other category's volume mid-flip, so the
-        // thumb jumped on every key-up/key-down. Cover it with a snapshot
-        // while TX is up and for a settle window after returning to RX.
+        // thumb jumped on every key-up/key-down. Show a snapshot while TX is
+        // up and for a settle window after returning to RX. The live slider
+        // is hidden underneath: the snapshot is transparent off the track, so
+        // a moving live thumb would show through as a second thumb.
         private static let settle: TimeInterval = 0.8
         private var freeze: UIView?
         private var unfreeze: DispatchWorkItem?
@@ -658,10 +660,12 @@ private struct SystemVolumeView: UIViewRepresentable {
                 snap.isUserInteractionEnabled = false
                 addSubview(snap)
                 freeze = snap
+                hideLiveSubviews(true)
             } else if freeze != nil {
                 let work = DispatchWorkItem { [weak self] in
                     self?.freeze?.removeFromSuperview()
                     self?.freeze = nil
+                    self?.hideLiveSubviews(false)
                 }
                 unfreeze = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.settle, execute: work)
@@ -674,6 +678,20 @@ private struct SystemVolumeView: UIViewRepresentable {
             if let freeze {
                 freeze.frame = bounds
                 bringSubviewToFront(freeze)
+                hideLiveSubviews(true)
+            }
+        }
+
+        // MPVolumeView can re-add its slider on a route change mid-freeze,
+        // so a subview added while frozen starts hidden too.
+        override func didAddSubview(_ subview: UIView) {
+            super.didAddSubview(subview)
+            if freeze != nil, subview !== freeze { subview.alpha = 0 }
+        }
+
+        private func hideLiveSubviews(_ hidden: Bool) {
+            for view in subviews where view !== freeze {
+                view.alpha = hidden ? 0 : 1
             }
         }
 
