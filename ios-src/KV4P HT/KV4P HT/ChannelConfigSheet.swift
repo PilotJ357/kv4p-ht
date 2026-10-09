@@ -22,6 +22,7 @@ struct OffsetToneSheet: View {
     @State private var direction: Direction
     @State private var magnitudeText: String
     @State private var toneIndex: Int
+    @State private var rxToneIndex: Int
     // Index into `presets`, or `presets.count` for a typed-in value.
     @State private var shift: Int
 
@@ -36,6 +37,7 @@ struct OffsetToneSheet: View {
         _direction = State(initialValue: abs(off) < 0.0005 ? .simplex : (off > 0 ? .plus : .minus))
         _magnitudeText = State(initialValue: text)
         _toneIndex = State(initialValue: Int(store.vfoToneIndex))
+        _rxToneIndex = State(initialValue: Int(store.vfoRxToneIndex))
         _shift = State(initialValue: Self.shift(for: text))
     }
 
@@ -46,6 +48,22 @@ struct OffsetToneSheet: View {
     private static func toneLabel(_ index: Int) -> String {
         guard let hz = ctcssToneHz(for: UInt8(clamping: index)) else { return "Off" }
         return String(format: "%.1f Hz", hz)
+    }
+
+    private func tonePicker(selection: Binding<Int>) -> some View {
+        Picker(selection: selection) {
+            Text("Off").tag(0)
+            ForEach(1...CTCSS_TONES.count, id: \.self) { idx in
+                Text(Self.toneLabel(idx)).tag(idx)
+            }
+        } label: {
+            Text("Tone")
+                .foregroundStyle(t.label)
+        } currentValueLabel: {
+            Text(Self.toneLabel(selection.wrappedValue))
+                .foregroundStyle(t.label2)
+        }
+        .pickerStyle(.menu)
     }
 
     private var magnitude: Float {
@@ -59,7 +77,8 @@ struct OffsetToneSheet: View {
         case .plus:    offset = magnitude
         case .minus:   offset = -magnitude
         }
-        store.setVfoConfig(offset: offset, toneIndex: UInt8(toneIndex))
+        store.setVfoConfig(offset: offset, toneIndex: UInt8(toneIndex),
+                           rxToneIndex: UInt8(rxToneIndex))
         dismiss()
     }
 
@@ -108,21 +127,20 @@ struct OffsetToneSheet: View {
                 .listRowSeparatorTint(t.sep)
 
                 Section {
-                    Picker(selection: $toneIndex) {
-                        Text("Off").tag(0)
-                        ForEach(1...CTCSS_TONES.count, id: \.self) { idx in
-                            Text(Self.toneLabel(idx)).tag(idx)
-                        }
-                    } label: {
-                        Text("Tone")
-                            .foregroundStyle(t.label)
-                    } currentValueLabel: {
-                        Text(Self.toneLabel(toneIndex))
-                            .foregroundStyle(t.label2)
-                    }
-                    .pickerStyle(.menu)
+                    tonePicker(selection: $toneIndex)
                 } header: {
                     Text("TX Tone (CTCSS)").foregroundStyle(t.label2)
+                }
+                .listRowBackground(t.surface)
+                .listRowSeparatorTint(t.sep)
+
+                Section {
+                    tonePicker(selection: $rxToneIndex)
+                } header: {
+                    Text("RX Tone (CTCSS)").foregroundStyle(t.label2)
+                } footer: {
+                    Text("Receive audio stays muted unless the signal carries this tone.")
+                        .foregroundStyle(t.label2)
                 }
                 .listRowBackground(t.surface)
                 .listRowSeparatorTint(t.sep)

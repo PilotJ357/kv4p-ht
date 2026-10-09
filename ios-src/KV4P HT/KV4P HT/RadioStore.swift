@@ -21,7 +21,8 @@ struct Memory: Identifiable, Codable {
     var group: String
     var freq: Float
     var offset: Float      // MHz, 0 = simplex
-    var plTone: Float      // Hz, 0 = no tone
+    var plTone: Float      // TX tone Hz, 0 = no tone
+    var rxTone: Float = 0  // RX tone squelch Hz, 0 = off
     var squelch: UInt8
     var isRepeater: Bool
     var notes: String = ""
@@ -35,7 +36,9 @@ struct Memory: Identifiable, Codable {
         if offset == 0 { return "Simplex" }
         return offset > 0 ? String(format: "+%.3f", offset) : String(format: "%.3f", offset)
     }
-    var toneString: String { plTone == 0 ? "Off" : String(format: "PL %.1f", plTone) }
+    var toneString: String {
+        RadioStore.toneString(tx: ctcssIndex(for: plTone), rx: ctcssIndex(for: rxTone))
+    }
     var metaString: String {
         if isRepeater { return "Repeater · \(offsetString) · \(toneString)" }
         return "Simplex · \(notes.isEmpty ? "Simplex" : notes)"
@@ -44,7 +47,7 @@ struct Memory: Identifiable, Codable {
 }
 
 extension Memory {
-    // Custom decode so memories saved before scanEnabled/bandwidth existed still load.
+    // Custom decode so memories saved before rxTone/scanEnabled/bandwidth existed still load.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -53,6 +56,7 @@ extension Memory {
         freq = try c.decode(Float.self, forKey: .freq)
         offset = try c.decode(Float.self, forKey: .offset)
         plTone = try c.decode(Float.self, forKey: .plTone)
+        rxTone = try c.decodeIfPresent(Float.self, forKey: .rxTone) ?? 0
         squelch = try c.decode(UInt8.self, forKey: .squelch)
         isRepeater = try c.decode(Bool.self, forKey: .isRepeater)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
@@ -208,7 +212,8 @@ class RadioStore {
     // Desired VFO channel config; survives without a memory match. Seeded
     // from firmware-applied state on connect and from memory tunes.
     var vfoOffset: Float = 0       // MHz, 0 = simplex
-    var vfoToneIndex: UInt8 = 0    // CTCSS index, 0 = off
+    var vfoToneIndex: UInt8 = 0    // TX CTCSS index, 0 = off
+    var vfoRxToneIndex: UInt8 = 0  // RX CTCSS index (tone squelch), 0 = off
     // Set while a beacon is out on its own simplex frequency: the applied
     // state then describes that channel, not the VFO, so it must not
     // overwrite vfoOffset/vfoToneIndex before the restore (#56).
@@ -587,6 +592,7 @@ class RadioStore {
         if let vfo = Self.appliedVfoConfig(ds, simplexSwitchActive: isSimplexFrequencySwitchActive) {
             vfoOffset = vfo.offset
             vfoToneIndex = vfo.toneIndex
+            vfoRxToneIndex = vfo.rxToneIndex
         }
     }
 
@@ -594,9 +600,9 @@ class RadioStore {
     // to a temporary simplex frequency switch and must be ignored.
     nonisolated static func appliedVfoConfig(
         _ ds: DeviceStateFrame, simplexSwitchActive: Bool
-    ) -> (offset: Float, toneIndex: UInt8)? {
+    ) -> (offset: Float, toneIndex: UInt8, rxToneIndex: UInt8)? {
         guard !simplexSwitchActive else { return nil }
-        return (ds.freqTx - ds.freqRx, ds.ctcssTx)
+        return (ds.freqTx - ds.freqRx, ds.ctcssTx, ds.ctcssRx)
     }
 
     // Retunes simplex (no offset/tone) to `freq` for `body`, then restores
@@ -809,10 +815,23 @@ class RadioStore {
         return offset > 0 ? String(format: "+%.3f", offset) : String(format: "%.3f", offset)
     }
 
-    // Applied TX tone from firmware state.
+    // Applied TX/RX tones from firmware state.
     var currentToneString: String {
-        guard let ds = ble.deviceState, let hz = ctcssToneHz(for: ds.ctcssTx) else { return "Off" }
-        return String(format: "PL %.1f", hz)
+        guard let ds = ble.deviceState else { return "Off" }
+        return Self.toneString(tx: ds.ctcssTx, rx: ds.ctcssRx)
+    }
+
+    // "PL" = TX only, "TSQL" = same tone both ways, else "TX/RX" Hz pair.
+    nonisolated static func toneString(tx: UInt8, rx: UInt8) -> String {
+        let txHz = ctcssToneHz(for: tx), rxHz = ctcssToneHz(for: rx)
+        switch (txHz, rxHz) {
+        case (nil, nil):                return "Off"
+        case let (t?, nil):             return String(format: "PL %.1f", t)
+        case let (t?, r?) where t == r: return String(format: "TSQL %.1f", t)
+        default:
+            let hz = { (v: Float?) in v.map { String(format: "%.1f", $0) } ?? "Off" }
+            return "\(hz(txHz))/\(hz(rxHz))"
+        }
     }
 
     var rxMode: RadioRxState {
@@ -1057,7 +1076,7 @@ class RadioStore {
     // state as one batch. The controller decides if a DesiredState frame
     // actually goes out. Offset and tone come from the VFO fields — tuning
     // a memory seeds them first via applyMemory.
-    // simplexOverride: transmit on the RX frequency with no tone, without
+    // simplexOverride: transmit on the RX frequency with no tones, without
     // touching the VFO fields (APRS frequency-switch beacons are simplex).
     // TX_ALLOWED follows the resulting TX freq/bandwidth inside the
     // controller, which also drops `ptt` when that's out of band.
@@ -1079,6 +1098,7 @@ class RadioStore {
         radio.setSquelch(effectiveSquelch)
         radio.setBandwidth(bandwidth == 0 ? DRA818_25K : DRA818_12K5)
         radio.setTxTone(simplexOverride ? 0 : vfoToneIndex)
+        radio.setRxTone(simplexOverride ? 0 : vfoRxToneIndex)
         radio.setFilters(highpass: filterHighPass, lowpass: filterLowPass)
         radio.setHighPower(isHighPower)
         if ptt { radio.pttDown() } else { radio.pttUp() }
@@ -1127,15 +1147,17 @@ class RadioStore {
         radio.beginUpdate()
         vfoOffset = mem.offset
         vfoToneIndex = ctcssIndex(for: mem.plTone)
+        vfoRxToneIndex = ctcssIndex(for: mem.rxTone)
         bandwidth = mem.bandwidth
         sendRadioState(freq: mem.freq)
         radio.endUpdate()
     }
 
-    // Pill-editor entry point: one desired-state push for both fields.
-    func setVfoConfig(offset: Float, toneIndex: UInt8) {
+    // Pill-editor entry point: one desired-state push for offset and both tones.
+    func setVfoConfig(offset: Float, toneIndex: UInt8, rxToneIndex: UInt8) {
         vfoOffset = offset
         vfoToneIndex = toneIndex
+        vfoRxToneIndex = rxToneIndex
         sendRadioState()
     }
 
