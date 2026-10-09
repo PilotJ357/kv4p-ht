@@ -454,10 +454,8 @@ class RadioStore {
                 self.aprs.processDueRetries()
             }
         }
-        ble.onDeviceState = { [weak self] ds in
+        ble.onDeviceState = { [weak self] _ in
             guard let self else { return }
-            self.meterGate.deviceState(txActive: ds.mode == 0, at: Date())
-            self.refreshMeterGate()
             self.hydrateUISettingsFromRadio()
             self.ble.setRxAudioMuted(self.effectiveRxMuted)
         }
@@ -756,6 +754,8 @@ class RadioStore {
         String(format: "%.3f", currentFreq)
     }
 
+    // Firmware reports RSSI in RX and TX audio level in TX through the same
+    // field (full-scale TX audio ≈ 90), so the meter follows both.
     var signalLevel: Int {
         guard let ds = ble.deviceState, ds.rssi > 0 else { return 0 }
         let result = 9.73 * log(0.0297 * Double(ds.rssi)) - 1.88
@@ -764,32 +764,6 @@ class RadioStore {
 
     var rawRSSI: UInt8 {
         ble.deviceState?.rssi ?? 0
-    }
-
-    // True while the S-meter must read zero: PTT pressed (before the
-    // firmware echoes TX), TX applied, an APRS frame queued for the
-    // firmware to key, or the short hold after any of those ends.
-    private(set) var meterSuppressed = false
-    @ObservationIgnored private var meterGate = TxMeterGate()
-    @ObservationIgnored private var meterGateExpiry: Task<Void, Never>?
-
-    // APRSController calls this as it hands a frame to the firmware.
-    func notePacketTx() {
-        meterGate.packetQueued(at: Date())
-        refreshMeterGate()
-    }
-
-    private func refreshMeterGate() {
-        let now = Date()
-        let suppressed = meterGate.suppressed(at: now)
-        if suppressed != meterSuppressed { meterSuppressed = suppressed }
-        meterGateExpiry?.cancel()
-        guard let next = meterGate.nextExpiry(after: now) else { return }
-        meterGateExpiry = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(next.timeIntervalSince(now)))
-            guard !Task.isCancelled else { return }
-            self?.refreshMeterGate()
-        }
     }
 
     // Applied TX offset from firmware state; preserves split TX/RX config
@@ -1073,8 +1047,6 @@ class RadioStore {
             // leave PTT keyed because the tune was refused.
             tuneNotice = notice
             radio.pttUp()
-            meterGate.setPTT(false, at: Date())
-            refreshMeterGate()
             updateVoiceTx(keyed: false)
             return
         }
@@ -1088,8 +1060,6 @@ class RadioStore {
         radio.setHighPower(isHighPower)
         if ptt { radio.pttDown() } else { radio.pttUp() }
         radio.endUpdate()
-        meterGate.setPTT(ptt, at: Date())
-        refreshMeterGate()
         updateVoiceTx(keyed: ptt)
     }
 

@@ -195,9 +195,9 @@ private struct RadioStage: View {
     @State private var showOffsetTone = false
     @State private var showLicenseAck = false
 
-    // Applied state (firmware DeviceState) drives the badge and frequency
-    // color; local request state drives the PTT button visual. The S-meter
-    // uses store.meterSuppressed, which covers both plus a post-TX hold.
+    // Applied state (firmware DeviceState) drives the badge, frequency color,
+    // and S-meter (RSSI in RX, TX audio level in TX); local request state only
+    // drives the PTT button visual.
     private var rxState: RadioRxState {
         store.rxMode
     }
@@ -373,8 +373,7 @@ private struct RadioStage: View {
             .padding(.top, 2)
 
             HStack(spacing: 14) {
-                SMeter(level: store.meterSuppressed ? 0 : store.signalLevel,
-                       active: !store.meterSuppressed, rawRSSI: store.rawRSSI)
+                SMeter(level: store.signalLevel, rawRSSI: store.rawRSSI)
                 RxBadge(state: rxState)
             }
             .padding(.top, 6)
@@ -791,8 +790,7 @@ private struct ScanBody: View {
                             .foregroundStyle(store.scanPaused ? t.green : t.label2)
                     }
                     FreqReadout(freq: store.currentFreqString, size: 60)
-                    SMeter(level: store.meterSuppressed ? 0 : store.signalLevel,
-                           active: !store.meterSuppressed, rawRSSI: store.rawRSSI)
+                    SMeter(level: store.signalLevel, rawRSSI: store.rawRSSI)
                 }
                 .padding(.vertical, 20)
 

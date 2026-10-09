@@ -453,7 +453,6 @@ class APRSController {
         guard let store, let me = myCallsign else { return false }
         let frame = AX25Frame(source: me, payload: Data(payload.utf8))
         let raw = frame.encodedWithoutFCS()
-        store.notePacketTx()
         store.ble.sendAx25Frame(raw, simplexFrequency: simplexFrequency)
         let info = parseAPRSPayload(frame.payload)
         let (kind, msgNum) = Self.frameIdentity(of: info)
