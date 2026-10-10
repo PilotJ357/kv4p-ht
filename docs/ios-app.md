@@ -72,6 +72,8 @@ vendor command **0x0E** (both directions). This matches Android's implementation
   ring buffer / jitter gate as ADPCM.
 - **Codec:** Codec2 1.2.0 (LGPL-2.1), vendored as the local Swift package
   [`ios-src/Codec2`](../ios-src/Codec2).
+  Its notice, the LGPL text, and the bundled Kiss FFT (BSD) notice are shown
+  in-app under About › Codec2 (`LICENSE-LGPL-2.1.txt`, `LICENSE-KissFFT.txt`).
 
 ---
 
