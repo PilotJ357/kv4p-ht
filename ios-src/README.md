@@ -11,6 +11,13 @@ Note: this app targets the firmware from
 [dkaukov/kv4p-ht `feature/ble`](https://github.com/dkaukov/kv4p-ht/tree/feature/ble),
 not this repo's `microcontroller-src/`.
 
+## Dependencies
+
+The only native dependency is [`Codec2/`](Codec2), a local Swift package for
+FreeDV 2400B digital voice. It is a vendored Codec2 1.2.0 subset (LGPL-2.1) that
+Xcode builds automatically. Run `swift test` in `ios-src/Codec2` to test it alone.
+See [Codec2/README.md](Codec2/README.md) for how to refresh the sources.
+
 ## TestFlight builds
 
 ```sh

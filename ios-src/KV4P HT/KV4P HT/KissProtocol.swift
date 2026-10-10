@@ -21,6 +21,13 @@ nonisolated let HOST_STATE_FILTER_HIGH:           UInt16 = 1 << 6
 nonisolated let HOST_STATE_FILTER_LOW:            UInt16 = 1 << 7
 nonisolated let HOST_STATE_TX_ALLOWED:            UInt16 = 1 << 11
 nonisolated let HOST_STATE_ENABLE_STATUS_REPORTS: UInt16 = 1 << 12
+// FreeDV 2400B digital voice: firmware runs the modem, host exchanges Codec2
+// 1300 frames via vendor command 0x0E. Global (not per-channel), not
+// persisted by firmware.
+nonisolated let HOST_STATE_FREEDV_2400B:          UInt16 = 1 << 13
+
+// HELLO feature bits
+nonisolated let FEATURE_FREEDV_2400B: UInt8 = 1 << 3
 
 // DeviceState-only flag bits (reported by firmware)
 nonisolated let DEVICE_STATE_PHYS_PTT_DOWN:       UInt16 = 1 << 8

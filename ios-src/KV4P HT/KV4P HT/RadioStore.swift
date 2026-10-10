@@ -28,6 +28,7 @@ struct Memory: Identifiable, Codable {
     var notes: String = ""
     var scanEnabled: Bool = true
     var bandwidth: UInt8 = 0  // 0=wide 25kHz, 1=narrow 12.5kHz (RadioStore.bandwidth encoding)
+    var freeDv2400b: Bool = false  // FreeDV 2400B digital voice instead of FM
     // The default APRS memory: retuned when the APRS frequency setting changes.
     var aprsRegionLinked: Bool = false
 
@@ -40,14 +41,15 @@ struct Memory: Identifiable, Codable {
         RadioStore.toneString(tx: ctcssIndex(for: plTone), rx: ctcssIndex(for: rxTone))
     }
     var metaString: String {
-        if isRepeater { return "Repeater · \(offsetString) · \(toneString)" }
-        return "Simplex · \(notes.isEmpty ? "Simplex" : notes)"
+        let mode = freeDv2400b ? " · 2400B" : ""
+        if isRepeater { return "Repeater · \(offsetString) · \(toneString)\(mode)" }
+        return "Simplex · \(notes.isEmpty ? "Simplex" : notes)\(mode)"
     }
 
 }
 
 extension Memory {
-    // Custom decode so memories saved before rxTone/scanEnabled/bandwidth existed still load.
+    // Custom decode so memories saved before rxTone/scanEnabled/bandwidth/freeDv2400b existed still load.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -62,6 +64,7 @@ extension Memory {
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         scanEnabled = try c.decodeIfPresent(Bool.self, forKey: .scanEnabled) ?? true
         bandwidth = try c.decodeIfPresent(UInt8.self, forKey: .bandwidth) ?? 0
+        freeDv2400b = try c.decodeIfPresent(Bool.self, forKey: .freeDv2400b) ?? false
         aprsRegionLinked = try c.decodeIfPresent(Bool.self, forKey: .aprsRegionLinked) ?? false
     }
 }
@@ -349,6 +352,26 @@ class RadioStore {
             }
         }
     }
+    // FreeDV 2400B digital voice on the current channel. Set in Settings or
+    // by tuning a memory (Memory.freeDv2400b). App-owned and
+    // persisted: firmware forgets the flag on reboot, so it's re-pushed on
+    // every connect.
+    var freeDv2400b: Bool = false {
+        didSet {
+            guard !isInitializing, freeDv2400b != oldValue else { return }
+            UserDefaults.standard.set(freeDv2400b, forKey: Self.freeDv2400bKey)
+            radio.setFreeDv2400b(freeDv2400b)
+        }
+    }
+    /// Connected firmware can do FreeDV 2400B. Read from the observable
+    /// HELLO (not the controller) so the settings row updates on connect.
+    var freeDvSupported: Bool {
+        ble.hello.map { ($0.features & FEATURE_FREEDV_2400B) != 0 } ?? false
+    }
+    /// Firmware is actually running FreeDV 2400B (RSSI field is SNR-derived).
+    var freeDvActive: Bool {
+        ble.deviceState.map { ($0.flags & HOST_STATE_FREEDV_2400B) != 0 } ?? false
+    }
     var liveCaptions: Bool = true {
         didSet {
             guard !isInitializing, liveCaptions != oldValue else { return }
@@ -442,6 +465,7 @@ class RadioStore {
             txTimeoutSeconds = s
         }
         saveTranscripts = UserDefaults.standard.bool(forKey: Self.saveTranscriptsKey)
+        freeDv2400b = UserDefaults.standard.bool(forKey: Self.freeDv2400bKey)
         loadTxBandPlan(region: deviceRegion)
         transcriptLog = TranscriptLog.load()
         isInitializing = false
@@ -485,6 +509,7 @@ class RadioStore {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.hydrateUISettingsFromRadio(adoptAll: true)
+                self.radio.setFreeDv2400b(self.freeDv2400b)
                 self.ble.setRxAudioMuted(self.effectiveRxMuted)
                 // Fire any message retries that came due while disconnected.
                 self.aprs.processDueRetries()
@@ -533,6 +558,7 @@ class RadioStore {
     private static let txLicenseAckKey = "txLicenseAcknowledged"
     private static let txTimeoutKey = "txTimeoutSeconds"
     private static let saveTranscriptsKey = "saveTranscripts"
+    private static let freeDv2400bKey = "freeDv2400bEnabled"
     private static let txBandPlanKey = "txBandPlan"
     // Android's AppSetting names.
     private static let txMin2mKey = "min2mTxFreq"
@@ -1201,6 +1227,7 @@ class RadioStore {
         radio.setRxTone(simplexOverride ? 0 : vfoRxToneIndex)
         radio.setFilters(highpass: filterHighPass, lowpass: filterLowPass)
         radio.setHighPower(isHighPower)
+        radio.setFreeDv2400b(freeDv2400b)
         if ptt { radio.pttDown() } else { radio.pttUp() }
         radio.endUpdate()
         updateVoiceTx(keyed: ptt)
@@ -1241,7 +1268,7 @@ class RadioStore {
         }
     }
 
-    // Batched so the bandwidth didSet and the channel push go out as one
+    // Batched so the bandwidth/voice-mode didSets and the channel push go out as one
     // DesiredState; the controller re-derives TX_ALLOWED for the new margin.
     func applyMemory(_ mem: Memory) {
         lastAppliedMemoryId = mem.id
@@ -1250,6 +1277,7 @@ class RadioStore {
         vfoToneIndex = ctcssIndex(for: mem.plTone)
         vfoRxToneIndex = ctcssIndex(for: mem.rxTone)
         bandwidth = mem.bandwidth
+        freeDv2400b = mem.freeDv2400b
         sendRadioState(freq: mem.freq)
         radio.endUpdate()
     }

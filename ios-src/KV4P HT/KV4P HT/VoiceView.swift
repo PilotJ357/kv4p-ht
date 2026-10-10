@@ -374,6 +374,17 @@ private struct RadioStage: View {
             HStack(spacing: 14) {
                 SMeter(level: store.signalLevel, tx: store.rxMode == .tx, rawRSSI: store.rawRSSI)
                 RxBadge(state: rxState)
+                if store.freeDvActive {
+                    // Digital voice; the S-meter shows the modem's SNR-derived level.
+                    Text("2400B")
+                        .font(.caption.weight(.bold))
+                        .tracking(0.8)
+                        .foregroundStyle(t.label2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .overlay(Capsule().stroke(t.label3, lineWidth: 1))
+                        .accessibilityLabel("FreeDV 2400B digital voice")
+                }
             }
             .padding(.top, 6)
         }

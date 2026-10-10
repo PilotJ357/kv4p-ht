@@ -13,6 +13,15 @@ struct MemoryCodingTests {
         #expect(mem.rxTone == 0)
         #expect(mem.scanEnabled)
         #expect(!mem.aprsRegionLinked)
+        #expect(!mem.freeDv2400b)
+    }
+
+    @Test func voiceModeRoundTripsAndShowsInMeta() throws {
+        let mem = Memory(name: "DV", group: "G", freq: 146.55, offset: 0, plTone: 0,
+                         squelch: 2, isRepeater: false, freeDv2400b: true)
+        let decoded = try JSONDecoder().decode(Memory.self, from: JSONEncoder().encode(mem))
+        #expect(decoded.freeDv2400b)
+        #expect(decoded.metaString.hasSuffix("· 2400B"))
     }
 
     @Test func aprsRegionLinkRoundTrips() throws {

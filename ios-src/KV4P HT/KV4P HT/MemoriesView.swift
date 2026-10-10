@@ -254,6 +254,7 @@ struct AddMemoryView: View {
     @State private var rxToneValue: Float = 0
     @State private var scanEnabled = true
     @State private var bandwidth: UInt8 = 0
+    @State private var freeDv2400b = false
 
     init(store: RadioStore, editing: Memory? = nil) {
         self.store = store
@@ -268,6 +269,7 @@ struct AddMemoryView: View {
             _rxToneValue = State(initialValue: m.rxTone)
             _scanEnabled = State(initialValue: m.scanEnabled)
             _bandwidth = State(initialValue: m.bandwidth)
+            _freeDv2400b = State(initialValue: m.freeDv2400b)
         }
     }
 
@@ -290,13 +292,14 @@ struct AddMemoryView: View {
             updated.isRepeater = offset != 0
             updated.scanEnabled = scanEnabled
             updated.bandwidth = bandwidth
+            updated.freeDv2400b = freeDv2400b
             store.updateMemory(updated)
         } else {
             store.memories.append(Memory(
                 name: name, group: group, freq: freq, offset: offset,
                 plTone: toneValue, rxTone: rxToneValue, squelch: 2,
                 isRepeater: offset != 0, notes: notes, scanEnabled: scanEnabled,
-                bandwidth: bandwidth
+                bandwidth: bandwidth, freeDv2400b: freeDv2400b
             ))
         }
         dismiss()
@@ -360,8 +363,24 @@ struct AddMemoryView: View {
                         Text("Bandwidth").foregroundStyle(t.label)
                     }
                     .tint(t.label2)
+                    // Hidden unless the radio can do it, but never hide a
+                    // memory's existing 2400B setting.
+                    if store.freeDvSupported || freeDv2400b {
+                        Picker(selection: $freeDv2400b) {
+                            Text("FM").tag(false)
+                            Text("FreeDV 2400B").tag(true)
+                        } label: {
+                            Text("Voice mode").foregroundStyle(t.label)
+                        }
+                        .tint(t.label2)
+                    }
                 } header: {
                     Text("Transmit").foregroundStyle(t.label2)
+                } footer: {
+                    if store.freeDvSupported || freeDv2400b {
+                        Text("FreeDV 2400B is digital voice. Both stations must use it.")
+                            .foregroundStyle(t.label2)
+                    }
                 }
                 .listRowBackground(t.surface)
                 .listRowSeparatorTint(t.sep)

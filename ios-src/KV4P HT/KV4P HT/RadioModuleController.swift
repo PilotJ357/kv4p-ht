@@ -34,6 +34,7 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         | HOST_STATE_FILTER_LOW
         | HOST_STATE_TX_ALLOWED
         | HOST_STATE_ENABLE_STATUS_REPORTS
+        | HOST_STATE_FREEDV_2400B
 
     private static let defaultDesiredFlags: UInt16 =
         HOST_STATE_HIGH_POWER | HOST_STATE_RSSI_ENABLED | HOST_STATE_ENABLE_STATUS_REPORTS
@@ -198,6 +199,12 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
         setDesiredFlag(HOST_STATE_HIGH_POWER, isHighPower)
     }
 
+    /// FreeDV 2400B digital voice. Ignored (forced off) unless the firmware
+    /// advertises it in HELLO.
+    func setFreeDv2400b(_ on: Bool) {
+        setDesiredFlag(HOST_STATE_FREEDV_2400B, on && hasFreeDv2400b)
+    }
+
     func setRssiEnabled(_ on: Bool) {
         setDesiredFlag(HOST_STATE_RSSI_ENABLED, on)
     }
@@ -303,6 +310,13 @@ nonisolated final class RadioModuleController: @unchecked Sendable {
     var hasPhysPttButton: Bool {
         withLock { firmwareInfo.map { ($0.features & 0x02) != 0 } ?? false }
     }
+
+    var hasFreeDv2400b: Bool {
+        withLock { firmwareInfo.map { ($0.features & FEATURE_FREEDV_2400B) != 0 } ?? false }
+    }
+
+    /// Voice mode the firmware reports it is running.
+    var isFreeDv2400bActive: Bool { hasDeviceFlag(HOST_STATE_FREEDV_2400B) }
 
     // MARK: - Private
 
