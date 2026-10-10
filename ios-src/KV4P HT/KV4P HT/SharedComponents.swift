@@ -165,10 +165,19 @@ struct RxBadge: View {
                 .fill(color)
                 .frame(width: 8, height: 8)
                 .shadow(color: state == .idle ? .clear : color, radius: 4)
-            Text(state.label)
-                .font(.caption.weight(.bold))
-                .tracking(0.8)
-                .foregroundStyle(color)
+            // Size to the widest label so the centered S-meter row
+            // doesn't shift when the state text changes (#132).
+            ZStack(alignment: .leading) {
+                ForEach(RadioRxState.allCases, id: \.self) { s in
+                    Text(s.label).hidden()
+                }
+                Text(state.label)
+                    .foregroundStyle(color)
+            }
+            .font(.caption.weight(.bold))
+            .tracking(0.8)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(state.label)
         }
     }
 }
