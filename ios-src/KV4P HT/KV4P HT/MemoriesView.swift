@@ -247,6 +247,7 @@ struct AddMemoryView: View {
 
     @State private var name = ""
     @State private var group = ""
+    @State private var notes = ""
     @State private var freqText = ""
     @State private var offsetText = "0"
     @State private var toneValue: Float = 0
@@ -260,6 +261,7 @@ struct AddMemoryView: View {
         if let m = editing {
             _name = State(initialValue: m.name)
             _group = State(initialValue: m.group)
+            _notes = State(initialValue: m.notes)
             _freqText = State(initialValue: m.freqString)
             _offsetText = State(initialValue: m.offset == 0 ? "0" : String(format: "%.3f", m.offset))
             _toneValue = State(initialValue: m.plTone)
@@ -280,6 +282,7 @@ struct AddMemoryView: View {
         if var updated = editing {
             updated.name = name
             updated.group = group
+            updated.notes = notes
             updated.freq = freq
             updated.offset = offset
             updated.plTone = toneValue
@@ -292,7 +295,7 @@ struct AddMemoryView: View {
             store.memories.append(Memory(
                 name: name, group: group, freq: freq, offset: offset,
                 plTone: toneValue, rxTone: rxToneValue, squelch: 2,
-                isRepeater: offset != 0, scanEnabled: scanEnabled,
+                isRepeater: offset != 0, notes: notes, scanEnabled: scanEnabled,
                 bandwidth: bandwidth
             ))
         }
@@ -324,8 +327,12 @@ struct AddMemoryView: View {
                 Section {
                     FieldRow(label: "Name",  value: $name)
                     FieldRow(label: "Group", value: $group)
+                    FieldRow(label: "Notes", value: $notes)
                 } header: {
                     Text("Identity").foregroundStyle(t.label2)
+                } footer: {
+                    Text("Notes show under the channel name on the Voice screen.")
+                        .foregroundStyle(t.label2)
                 }
                 .listRowBackground(t.surface)
                 .listRowSeparatorTint(t.sep)
