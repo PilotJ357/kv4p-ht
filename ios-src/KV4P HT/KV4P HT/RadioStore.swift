@@ -1298,7 +1298,7 @@ class RadioStore {
     }
 }
 
-enum RadioRxState {
+enum RadioRxState: CaseIterable {
     case idle, rx, tx
     var label: String {
         switch self {
