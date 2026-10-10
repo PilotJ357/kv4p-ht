@@ -117,7 +117,7 @@ struct AboutView: View {
     }
 }
 
-private struct ExternalLinkLabel: View {
+struct ExternalLinkLabel: View {
     @Environment(\.theme) var t
     var title: String
     var subtitle: String? = nil

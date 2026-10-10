@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Memories Tab
 
@@ -9,6 +10,9 @@ struct MemoriesView: View {
     @State private var editingMemory: Memory? = nil
     @State private var searchText = ""
     @State private var isEditMode = false
+    @State private var showImporter = false
+    @State private var pendingImport: RepeaterImport? = nil
+    @State private var importError: String? = nil
 
     private var filteredMemories: [Memory] {
         guard !searchText.isEmpty else { return store.memories }
@@ -91,7 +95,7 @@ struct MemoriesView: View {
                     }
                 } description: {
                     Text(searching ? "No memories match \u{201C}\(searchText)\u{201D}."
-                                   : "Tap + to save a frequency.")
+                                   : "Tap + to save a frequency or import a repeater CSV.")
                         .foregroundStyle(t.label3)
                 }
             }
@@ -107,7 +111,14 @@ struct MemoriesView: View {
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { showAddMemory = true } label: {
+                Menu {
+                    Button { showAddMemory = true } label: {
+                        Label("New Memory", systemImage: "square.and.pencil")
+                    }
+                    Button { showImporter = true } label: {
+                        Label("Import Repeaters (CSV)…", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
                     Label("Add Memory", systemImage: "plus")
                 }
             }
@@ -118,6 +129,27 @@ struct MemoriesView: View {
                 .preferredColorScheme(store.theme.isDark ? .dark : .light)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        // RepeaterBook / CHIRP exports the user downloaded themselves; no network.
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            do {
+                pendingImport = try RepeaterImport.load(result.get())
+            } catch {
+                importError = error.localizedDescription
+            }
+        }
+        .sheet(item: $pendingImport) { file in
+            RepeaterImportView(store: store, file: file)
+                .environment(\.theme, store.theme)
+                .preferredColorScheme(store.theme.isDark ? .dark : .light)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .alert("Couldn't Import", isPresented: Binding(get: { importError != nil },
+                                                      set: { if !$0 { importError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importError ?? "")
         }
         .sheet(item: $editingMemory) { mem in
             AddMemoryView(store: store, editing: mem)
@@ -215,6 +247,7 @@ struct AddMemoryView: View {
 
     @State private var name = ""
     @State private var group = ""
+    @State private var notes = ""
     @State private var freqText = ""
     @State private var offsetText = "0"
     @State private var toneValue: Float = 0
@@ -229,6 +262,7 @@ struct AddMemoryView: View {
         if let m = editing {
             _name = State(initialValue: m.name)
             _group = State(initialValue: m.group)
+            _notes = State(initialValue: m.notes)
             _freqText = State(initialValue: m.freqString)
             _offsetText = State(initialValue: m.offset == 0 ? "0" : String(format: "%.3f", m.offset))
             _toneValue = State(initialValue: m.plTone)
@@ -250,6 +284,7 @@ struct AddMemoryView: View {
         if var updated = editing {
             updated.name = name
             updated.group = group
+            updated.notes = notes
             updated.freq = freq
             updated.offset = offset
             updated.plTone = toneValue
@@ -263,7 +298,7 @@ struct AddMemoryView: View {
             store.memories.append(Memory(
                 name: name, group: group, freq: freq, offset: offset,
                 plTone: toneValue, rxTone: rxToneValue, squelch: 2,
-                isRepeater: offset != 0, scanEnabled: scanEnabled,
+                isRepeater: offset != 0, notes: notes, scanEnabled: scanEnabled,
                 bandwidth: bandwidth, freeDv2400b: freeDv2400b
             ))
         }
@@ -295,8 +330,12 @@ struct AddMemoryView: View {
                 Section {
                     FieldRow(label: "Name",  value: $name)
                     FieldRow(label: "Group", value: $group)
+                    FieldRow(label: "Notes", value: $notes)
                 } header: {
                     Text("Identity").foregroundStyle(t.label2)
+                } footer: {
+                    Text("Notes show under the channel name on the Voice screen.")
+                        .foregroundStyle(t.label2)
                 }
                 .listRowBackground(t.surface)
                 .listRowSeparatorTint(t.sep)
@@ -375,7 +414,7 @@ struct AddMemoryView: View {
     }
 }
 
-private struct FieldRow: View {
+struct FieldRow: View {
     @Environment(\.theme) var t
     var label: String
     @Binding var value: String

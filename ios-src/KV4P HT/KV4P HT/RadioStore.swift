@@ -959,8 +959,18 @@ class RadioStore {
         }
     }
 
+    // Last memory tuned from the list or by scan. Breaks ties between
+    // memories on the same frequency (imports often duplicate one).
+    var lastAppliedMemoryId: UUID? = nil
+
     func memory(for freq: Float) -> Memory? {
-        memories.first { abs($0.freq - freq) < 0.001 }
+        Self.memory(in: memories, for: freq, preferring: lastAppliedMemoryId)
+    }
+
+    nonisolated static func memory(in memories: [Memory], for freq: Float, preferring id: UUID?) -> Memory? {
+        let matches = { (m: Memory) in abs(m.freq - freq) < 0.001 }
+        if let id, let mem = memories.first(where: { $0.id == id }), matches(mem) { return mem }
+        return memories.first(where: matches)
     }
 
     var activeMemoryId: UUID? {
@@ -1261,6 +1271,7 @@ class RadioStore {
     // Batched so the bandwidth/voice-mode didSets and the channel push go out as one
     // DesiredState; the controller re-derives TX_ALLOWED for the new margin.
     func applyMemory(_ mem: Memory) {
+        lastAppliedMemoryId = mem.id
         radio.beginUpdate()
         vfoOffset = mem.offset
         vfoToneIndex = ctcssIndex(for: mem.plTone)
