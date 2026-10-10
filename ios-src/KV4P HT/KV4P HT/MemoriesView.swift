@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Memories Tab
 
@@ -9,6 +10,9 @@ struct MemoriesView: View {
     @State private var editingMemory: Memory? = nil
     @State private var searchText = ""
     @State private var isEditMode = false
+    @State private var showImporter = false
+    @State private var pendingImport: RepeaterImport? = nil
+    @State private var importError: String? = nil
 
     private var filteredMemories: [Memory] {
         guard !searchText.isEmpty else { return store.memories }
@@ -91,7 +95,7 @@ struct MemoriesView: View {
                     }
                 } description: {
                     Text(searching ? "No memories match \u{201C}\(searchText)\u{201D}."
-                                   : "Tap + to save a frequency.")
+                                   : "Tap + to save a frequency or import a repeater CSV.")
                         .foregroundStyle(t.label3)
                 }
             }
@@ -107,7 +111,14 @@ struct MemoriesView: View {
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { showAddMemory = true } label: {
+                Menu {
+                    Button { showAddMemory = true } label: {
+                        Label("New Memory", systemImage: "square.and.pencil")
+                    }
+                    Button { showImporter = true } label: {
+                        Label("Import Repeaters (CSV)…", systemImage: "square.and.arrow.down")
+                    }
+                } label: {
                     Label("Add Memory", systemImage: "plus")
                 }
             }
@@ -118,6 +129,27 @@ struct MemoriesView: View {
                 .preferredColorScheme(store.theme.isDark ? .dark : .light)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        // RepeaterBook / CHIRP exports the user downloaded themselves; no network.
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            do {
+                pendingImport = try RepeaterImport.load(result.get())
+            } catch {
+                importError = error.localizedDescription
+            }
+        }
+        .sheet(item: $pendingImport) { file in
+            RepeaterImportView(store: store, file: file)
+                .environment(\.theme, store.theme)
+                .preferredColorScheme(store.theme.isDark ? .dark : .light)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .alert("Couldn't Import", isPresented: Binding(get: { importError != nil },
+                                                      set: { if !$0 { importError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importError ?? "")
         }
         .sheet(item: $editingMemory) { mem in
             AddMemoryView(store: store, editing: mem)
@@ -356,7 +388,7 @@ struct AddMemoryView: View {
     }
 }
 
-private struct FieldRow: View {
+struct FieldRow: View {
     @Environment(\.theme) var t
     var label: String
     @Binding var value: String
