@@ -47,7 +47,7 @@ jobs:
     name: App unit tests
     # Preview image; the only hosted runner with the iOS 27 SDK the app is developed against.
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -60,6 +60,8 @@ jobs:
           xcodebuild -version
           xcrun simctl list devices available iPhone
 
+      # Serial: the timing-based DemoRadio tests starve when all suites share the runner's 3 cores.
+      # No diagnostics: on failure, collecting a simulator sysdiagnose hangs for 10 minutes.
       - name: Run KV4P HTTests
         working-directory: ios-src/KV4P HT
         run: |
@@ -69,5 +71,7 @@ jobs:
             -scheme "KV4P HT" \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -only-testing:"KV4P HTTests" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
             CODE_SIGNING_ALLOWED=NO \
             test
