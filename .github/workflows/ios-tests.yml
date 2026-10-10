@@ -1,0 +1,73 @@
+name: iOS Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ios-src/Codec2/**'
+      - 'ios-src/KV4P HT/**'
+      - '.github/workflows/ios-tests.yml'
+  pull_request:
+    paths:
+      - 'ios-src/Codec2/**'
+      - 'ios-src/KV4P HT/**'
+      - '.github/workflows/ios-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  codec2:
+    name: Codec2 package tests
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Run swift test
+        working-directory: ios-src/Codec2
+        run: swift test
+
+  app:
+    name: App unit tests
+    # Preview image; the only hosted runner with the iOS 27 SDK the app is developed against.
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_27.1.app
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available iPhone
+
+      - name: Run KV4P HTTests
+        working-directory: ios-src/KV4P HT
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "KV4P HT.xcodeproj" \
+            -scheme "KV4P HT" \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -only-testing:"KV4P HTTests" \
+            CODE_SIGNING_ALLOWED=NO \
+            test
