@@ -7,7 +7,7 @@ The full source code is public, so everything below can be checked against the c
 
 ## The short version
 
-- No accounts, ads, analytics, tracking, or third-party SDKs.
+- No accounts, ads, analytics, tracking, or third-party SDKs. The only third-party code is the open-source Codec2 voice codec, which runs entirely on your device.
 - The app itself makes no internet requests. Nothing is sent to the developer.
 - Your settings and history stay on your device.
 - **Anything you transmit on the radio is public.** That includes voice, APRS messages, and,

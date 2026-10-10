@@ -1904,6 +1904,9 @@ The complete LGPL 2.1 license text is reproduced in the following shared license
 Codec2 version 1.2.0 is used by the Android and iOS digital voice implementations.
 On iOS, an unmodified subset of the Codec2 sources (mode 1300 only) is vendored in
 ios-src/Codec2 and statically linked into the app.
+The vendored sources include Kiss FFT (Copyright (c) 2003-2010, Mark Borgerding,
+BSD 3-clause; license text in ios-src/Codec2/Sources/CCodec2/kiss_fft.c).
+The iOS app shows the Codec2, LGPL 2.1, and Kiss FFT notices under More > About > Codec2.
 Codec2 is licensed under the GNU Lesser General Public License, version 2.1.
 The complete LGPL 2.1 license text is reproduced in the following shared license entry.
 

@@ -12,7 +12,7 @@ struct PrivacyPolicyView: View {
     // (heading, markdown body). Bodies use SwiftUI's inline Markdown.
     private static let sections: [(String, String)] = [
         ("The short version", """
-        • No accounts, ads, analytics, tracking, or third-party SDKs.
+        • No accounts, ads, analytics, tracking, or third-party SDKs. The only third-party code is the open-source Codec2 voice codec, which runs entirely on your device.
         • The app itself makes no internet requests. Nothing is sent to the developer.
         • Your settings and history stay on your device.
         • **Anything you transmit on the radio is public.** That includes voice, APRS messages, and, if you turn it on, your position.

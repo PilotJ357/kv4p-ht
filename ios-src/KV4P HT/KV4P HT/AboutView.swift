@@ -4,6 +4,9 @@ import SwiftUI
 // Version info, source/license (GPLv3 §6: binary distribution must carry the
 // license and point to the Corresponding Source), and the amateur-license
 // notice. LICENSE-GPLv3.txt is a copy of LICENSE at the repo root.
+// Codec2 (LGPL-2.1 §6: prominent notice + license copy) is linked statically;
+// LICENSE-LGPL-2.1.txt is a copy of ios-src/Codec2/LICENSE, and
+// LICENSE-KissFFT.txt is the BSD notice from the Kiss FFT files it bundles.
 
 struct AboutView: View {
     @Environment(\.theme) var t
@@ -78,7 +81,7 @@ struct AboutView: View {
                     ExternalLinkLabel(title: "kv4p HT project", subtitle: "github.com/VanceVagell/kv4p-ht")
                 }
                 NavigationLink {
-                    LicenseTextView()
+                    LicenseTextView.gpl
                 } label: {
                     LabeledContent {
                         Text("GPLv3").foregroundStyle(t.label2)
@@ -86,10 +89,19 @@ struct AboutView: View {
                         Text("License").foregroundStyle(t.label)
                     }
                 }
+                NavigationLink {
+                    LicenseTextView.codec2
+                } label: {
+                    LabeledContent {
+                        Text("LGPL-2.1").foregroundStyle(t.label2)
+                    } label: {
+                        Text("Codec2").foregroundStyle(t.label)
+                    }
+                }
             } header: {
                 Text("Open source").foregroundStyle(t.label2)
             } footer: {
-                Text("Pocket HT is free software under the GNU General Public License v3. This iOS app is built on the kv4p HT project by Vance Vagell (KV4P) and uses no third-party libraries — only Apple system frameworks.")
+                Text("Pocket HT is free software under the GNU General Public License v3. This iOS app is built on the kv4p HT project by Vance Vagell (KV4P) and uses the Codec2 library (GNU LGPL v2.1) for FreeDV digital voice.")
                     .foregroundStyle(t.label2)
             }
             .listRowBackground(t.surface)
@@ -147,13 +159,41 @@ struct ExternalLinkLabel: View {
 private struct LicenseTextView: View {
     @Environment(\.theme) var t
 
+    struct Part {
+        var heading: String? = nil
+        var paragraphs: [String]
+    }
+
+    let title: String
+    let parts: [Part]
+
+    static let gpl = LicenseTextView(title: "GPLv3", parts: [
+        Part(paragraphs: paragraphs(resource: "LICENSE-GPLv3",
+                                    fallback: "https://www.gnu.org/licenses/gpl-3.0.txt")),
+    ])
+
+    static let codec2 = LicenseTextView(title: "Codec2", parts: [
+        Part(paragraphs: [
+            "Pocket HT uses Codec2 1.2.0 for FreeDV digital voice.",
+            "Copyright © 1990–2017 David Rowe and contributors, including Perens LLC, Tomas Härdin, and Thomas Kurin and Stefan Erhardt.",
+            "Codec2 is free software under the GNU Lesser General Public License, version 2.1, reproduced below. Source: github.com/drowe67/codec2. The app statically links an unmodified copy; Pocket HT's full source (github.com/PilotJ357/kv4p-ht) lets you rebuild the app with a modified Codec2.",
+            "Codec2 includes Kiss FFT by Mark Borgerding, under the BSD license at the end of this page.",
+        ]),
+        Part(heading: "GNU LGPL v2.1",
+             paragraphs: paragraphs(resource: "LICENSE-LGPL-2.1",
+                                    fallback: "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt")),
+        Part(heading: "Kiss FFT",
+             paragraphs: paragraphs(resource: "LICENSE-KissFFT",
+                                    fallback: "https://github.com/mborgerding/kissfft")),
+    ])
+
     // Split on blank lines so the ScrollView lays out paragraphs lazily
     // instead of one 35 KB Text, and unwrap the file's 80-column hard wraps
     // so paragraphs reflow to the screen width.
-    private static let paragraphs: [String] = {
-        guard let url = Bundle.main.url(forResource: "LICENSE-GPLv3", withExtension: "txt"),
+    private static func paragraphs(resource: String, fallback: String) -> [String] {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: "txt"),
               let text = try? String(contentsOf: url, encoding: .utf8)
-        else { return ["License text unavailable. See https://www.gnu.org/licenses/gpl-3.0.txt"] }
+        else { return ["License text unavailable. See \(fallback)"] }
         return text.components(separatedBy: "\n\n")
             .map { para in
                 para.split(separator: "\n")
@@ -162,16 +202,31 @@ private struct LicenseTextView: View {
                     .joined(separator: " ")
             }
             .filter { !$0.isEmpty }
-    }()
+    }
+
+    // One flat list with unique ids: nested ForEach-by-offset inside the
+    // LazyVStack collides ids across parts and leaves blank gaps.
+    private var lines: [(text: String, isHeading: Bool)] {
+        parts.flatMap { part in
+            (part.heading.map { [($0, true)] } ?? []) + part.paragraphs.map { ($0, false) }
+        }
+    }
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(Self.paragraphs.enumerated()), id: \.offset) { _, p in
-                    Text(p)
-                        .font(.subheadline)
-                        .foregroundStyle(t.label)
-                        .fixedSize(horizontal: false, vertical: true)
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    if line.isHeading {
+                        Text(line.text)
+                            .font(.headline)
+                            .foregroundStyle(t.label)
+                            .padding(.top, 12)
+                    } else {
+                        Text(line.text)
+                            .font(.subheadline)
+                            .foregroundStyle(t.label)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -179,7 +234,7 @@ private struct LicenseTextView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(t.bg.ignoresSafeArea())
-        .navigationTitle("GPLv3")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
 }
