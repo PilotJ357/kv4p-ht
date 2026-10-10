@@ -44,3 +44,25 @@ struct MemoryCodingTests {
         #expect(decoded.toneString == "100.0/107.2")
     }
 }
+
+// Duplicate frequencies (e.g. an import repeating a hand-entered memory):
+// the one last tuned is the active one, not just the first in the list.
+struct ActiveMemoryTests {
+    private func mem(_ name: String, _ freq: Float) -> Memory {
+        Memory(name: name, group: "G", freq: freq, offset: 0, plTone: 0, squelch: 2, isRepeater: false)
+    }
+
+    @Test func prefersLastAppliedAmongDuplicates() {
+        let a = mem("Manual", 146.94), b = mem("Imported", 146.94)
+        #expect(RadioStore.memory(in: [a, b], for: 146.94, preferring: nil)?.id == a.id)
+        #expect(RadioStore.memory(in: [a, b], for: 146.94, preferring: b.id)?.id == b.id)
+    }
+
+    @Test func staleOrDeletedPreferenceFallsBack() {
+        let a = mem("A", 146.94), b = mem("B", 147.24)
+        // Tuned elsewhere since: the remembered memory doesn't match the frequency.
+        #expect(RadioStore.memory(in: [a, b], for: 146.94, preferring: b.id)?.id == a.id)
+        #expect(RadioStore.memory(in: [a, b], for: 146.94, preferring: UUID())?.id == a.id)
+        #expect(RadioStore.memory(in: [a, b], for: 145.0, preferring: a.id) == nil)
+    }
+}
