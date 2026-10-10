@@ -204,6 +204,15 @@ actor AudioManager {
     nonisolated(unsafe) private var txResampleRatio: Float = 1.0
     nonisolated(unsafe) private var txResamplePhase: Float = 0.0
     nonisolated(unsafe) private var micTapInstalled = false
+    // FreeDV 2400B: while txUseCodec2 is set, mic samples go to Codec2
+    // instead of ADPCM. The framer is allocated once and never reassigned,
+    // so a tap callback still in flight after removeTap can't race a
+    // reference swap; only the flag and reset() change between captures.
+    nonisolated(unsafe) private let txCodec2 = Codec2TxFramer()
+    nonisolated(unsafe) private var txUseCodec2 = false
+    // FreeDV RX decoder. BLE queue only.
+    nonisolated(unsafe) private let rxCodec2 = Codec2RxDecoder()
+    nonisolated(unsafe) private var codec2DecodeBuf = [Float](repeating: 0, count: Codec2RxDecoder.outputSamples)
 
     var isPlaying: Bool { playing }
 
@@ -395,18 +404,34 @@ actor AudioManager {
         }
         let nSamples = 1 + nNibbleBytes * 2
 
-        // Track peaks and apply soft limiter
-        for i in 0..<nSamples {
-            let mag = abs(pcmDecodeBuf[i])
+        pcmDecodeBuf.withUnsafeMutableBufferPointer { buf in
+            enqueueDecoded(buf.baseAddress!, count: nSamples)
+        }
+    }
+
+    /// FreeDV 2400B RX: one 7-byte Codec2 1300 frame (40 ms) from command 0x0E.
+    nonisolated func feedCodec2Frame(_ data: Data) {
+        guard playing else { return }
+        if ringBuffer.available >= Self.softMaxSamples { return }
+        codec2DecodeBuf.withUnsafeMutableBufferPointer { buf in
+            guard rxCodec2.decode(data, into: buf.baseAddress!) else {
+                print("[AudioManager] dropping Codec2 frame: \(data.count)B")
+                return
+            }
+            enqueueDecoded(buf.baseAddress!, count: buf.count)
+        }
+    }
+
+    // Peak tracking + soft limiter, then into the jitter buffer and taps.
+    nonisolated private func enqueueDecoded(_ samples: UnsafeMutablePointer<Float>, count: Int) {
+        for i in 0..<count {
+            let mag = abs(samples[i])
             if mag > rxPeakMax { rxPeakMax = mag }
             if mag > 0.95 { rxClipCount += 1 }
-            pcmDecodeBuf[i] = Self.softClip(pcmDecodeBuf[i])
+            samples[i] = Self.softClip(samples[i])
         }
-
-        pcmDecodeBuf.withUnsafeMutableBufferPointer { buf in
-            _ = ringBuffer.write(buf.baseAddress!, frameCount: nSamples)
-        }
-        onDecodedSamples?(Array(pcmDecodeBuf.prefix(nSamples)), nSamples)
+        _ = ringBuffer.write(samples, frameCount: count)
+        onDecodedSamples?(Array(UnsafeBufferPointer(start: samples, count: count)), count)
     }
 
     // Soft limiter: identity below knee, then tanh squashes the remainder into
@@ -424,15 +449,17 @@ actor AudioManager {
 
     // Permission is requested up front by the PTT gate (RadioStore.voicePTTGate)
     // so the radio never keys while the system prompt is on screen.
-    func startMicCapture(handler: @escaping (Data) -> Void) async {
+    /// `codec2`: encode as FreeDV 2400B Codec2 1300 frames (7 bytes / 40 ms)
+    /// instead of ADPCM frames.
+    func startMicCapture(codec2: Bool = false, handler: @escaping (Data) -> Void) async {
         guard AVAudioApplication.shared.recordPermission == .granted else {
             print("[AudioManager] startMicCapture: mic permission not granted")
             return
         }
-        await installMicTap(handler: handler)
+        await installMicTap(codec2: codec2, handler: handler)
     }
 
-    private func installMicTap(handler: @escaping (Data) -> Void) async {
+    private func installMicTap(codec2: Bool, handler: @escaping (Data) -> Void) async {
         if micTapInstalled {
             engine.inputNode.removeTap(onBus: 0)
             micTapInstalled = false
@@ -449,6 +476,8 @@ actor AudioManager {
         txFrameHandler = handler
         txEncState = (predictor: 0, stepIndex: 0)
         txAccumCount = 0
+        txCodec2.reset()
+        txUseCodec2 = codec2
         txResamplePhase = 0
         txResampleRatio = 0 // sentinel — computed from first buffer
 
@@ -495,6 +524,7 @@ actor AudioManager {
         }
         txFrameHandler = nil
         txAccumCount = 0
+        txUseCodec2 = false
         // Input-tainted engine can't start under .playback — build a fresh
         // output-only engine (mic hardware released, indicator turns off).
         rebuildEngine()
@@ -536,35 +566,32 @@ actor AudioManager {
         guard ratio > 0 else { return }
 
         if ratio == 1.0 {
-            var offset = 0
-            while offset < frameCount {
-                let space = Self.adpcmSamplesPerFrame - txAccumCount
-                let chunk = min(space, frameCount - offset)
-                for i in 0..<chunk {
-                    let s = max(-1.0, min(1.0, floatData[offset + i]))
-                    txAccumBuf[txAccumCount + i] = Int16(s * 32767.0)
-                }
-                txAccumCount += chunk
-                offset += chunk
-                if txAccumCount == Self.adpcmSamplesPerFrame {
-                    flushTxAccum()
-                }
+            for i in 0..<frameCount {
+                appendTxSample(Int16(max(-1.0, min(1.0, floatData[i])) * 32767.0))
             }
         } else {
             var phase = txResamplePhase
             for i in 0..<frameCount {
                 phase += ratio
-                while phase >= 1.0 && txAccumCount < Self.adpcmSamplesPerFrame {
+                while phase >= 1.0 {
                     phase -= 1.0
-                    let s = max(-1.0, min(1.0, floatData[i]))
-                    txAccumBuf[txAccumCount] = Int16(s * 32767.0)
-                    txAccumCount += 1
-                    if txAccumCount == Self.adpcmSamplesPerFrame {
-                        flushTxAccum()
-                    }
+                    appendTxSample(Int16(max(-1.0, min(1.0, floatData[i])) * 32767.0))
                 }
             }
             txResamplePhase = phase
+        }
+    }
+
+    // One 16 kHz TX sample → current codec's frame accumulator.
+    nonisolated private func appendTxSample(_ sample: Int16) {
+        if txUseCodec2 {
+            txCodec2.push(sample) { txFrameHandler?($0) }
+            return
+        }
+        txAccumBuf[txAccumCount] = sample
+        txAccumCount += 1
+        if txAccumCount == Self.adpcmSamplesPerFrame {
+            flushTxAccum()
         }
     }
 

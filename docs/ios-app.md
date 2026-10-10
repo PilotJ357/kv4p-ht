@@ -29,7 +29,7 @@ The firmware this app talks to is **dkaukov's fork, branch `feature/ble`**
 
 - BLE GATT: custom service `00000001-ba2a-46c9-ae49-01b0961f68bb`, TX char `...0003` (notify, radio→phone), RX char `...0002` (write-without-response, phone→radio).
 - KISS framing over GATT; vendor frames carry 4-byte prefix + protocol version + command byte.
-- Audio command **0x0C** both directions. DesiredState is **0x0D**.
+- Audio command **0x0C** both directions (FreeDV 2400B: **0x0E**). DesiredState is **0x0D**.
 - Audio codec: **IMA ADPCM (WAV layout), 249 samples / 128 bytes per frame, 16 kHz wire rate** (firmware hardware stays 48 kHz internally).
 - ESP32 streams RX audio only after a DesiredState with `RX_AUDIO_OPEN`.
 
@@ -46,6 +46,32 @@ connected (delivery gaps can reach ~1 s).
 `inputNode` tap → linear resample to 16 kHz → accumulate 249-sample frames →
 ADPCM encode → vendor frame 0x0C → GATT write. Tap is installed only while PTT
 is held (see mic indicator section).
+
+### FreeDV 2400B digital voice
+
+The firmware runs the FreeDV 2400B modem. The app only exchanges **Codec2 1300**
+frames with it: 320 samples at 8 kHz ↔ 7 bytes, one frame every 40 ms, one frame per
+vendor command **0x0E** (both directions). This matches Android's implementation.
+
+- **Enable:** set DesiredState flag `HOST_STATE_FREEDV_2400B` (bit 13). Only
+  available when HELLO `features & 0x08`.
+  - It's a channel property, like bandwidth. Set it in Settings → Radio →
+    "Voice mode", or per memory (`Memory.freeDv2400b`, applied by
+    `applyMemory`, so scan switches mode per channel too). Both are hidden
+    unless the radio supports it.
+  - Firmware doesn't persist the flag, so the app stores the current mode
+    and re-pushes it on every connect.
+- **In 2400B mode, firmware:**
+  - ignores 0x0C TX audio and stops sending 0x0C RX audio
+  - squelches on decoded frames
+  - reports an SNR-derived value in the RSSI field
+- **TX:** 16 kHz mic samples → 2:1 pair-average → `Codec2TxFramer` → 0x0E.
+  - Frames must keep flowing while PTT is held (firmware TX watchdog is about 778 ms).
+  - A partial frame is dropped on PTT release.
+- **RX:** 0x0E → `Codec2RxDecoder` (×2 sample duplication to 16 kHz) → same
+  ring buffer / jitter gate as ADPCM.
+- **Codec:** Codec2 1.2.0 (LGPL-2.1), vendored as the local Swift package
+  [`ios-src/Codec2`](../ios-src/Codec2).
 
 ---
 

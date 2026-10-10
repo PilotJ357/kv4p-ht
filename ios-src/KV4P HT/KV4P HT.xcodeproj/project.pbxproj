@@ -11,6 +11,7 @@
 		2962EDCF2FDF66E9009E564E /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2962EDCE2FDF66E9009E564E /* WidgetKit.framework */; };
 		2962EDD12FDF66E9009E564E /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2962EDD02FDF66E9009E564E /* SwiftUI.framework */; };
 		2962EDE02FDF66EB009E564E /* APRSMonitorWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 2962EDCC2FDF66E9009E564E /* APRSMonitorWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		CC2C0DEC0000000000000003 /* Codec2Swift in Frameworks */ = {isa = PBXBuildFile; productRef = CC2C0DEC0000000000000002 /* Codec2Swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -121,6 +122,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CC2C0DEC0000000000000003 /* Codec2Swift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -217,6 +219,7 @@
 			);
 			name = "KV4P HT";
 			packageProductDependencies = (
+				CC2C0DEC0000000000000002 /* Codec2Swift */,
 			);
 			productName = "KV4P HT";
 			productReference = 29C098552FC91C0C002DAC76 /* KV4P HT.app */;
@@ -303,6 +306,9 @@
 			);
 			mainGroup = 29C0984C2FC91C0C002DAC76;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CC2C0DEC0000000000000001 /* XCLocalSwiftPackageReference "../Codec2" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 29C098562FC91C0C002DAC76 /* Products */;
 			projectDirPath = "";
@@ -794,6 +800,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		CC2C0DEC0000000000000001 /* XCLocalSwiftPackageReference "../Codec2" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Codec2;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CC2C0DEC0000000000000002 /* Codec2Swift */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Codec2Swift;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 29C0984D2FC91C0C002DAC76 /* Project object */;
 }

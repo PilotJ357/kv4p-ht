@@ -1901,7 +1901,9 @@ The complete LGPL 2.1 license text is reproduced in the following shared license
 
 ############## LICENSE FOR: https://github.com/drowe67/codec2 (LGPL-2.1-only)
 
-Codec2 version 1.2.0 is used by the Android digital voice implementation.
+Codec2 version 1.2.0 is used by the Android and iOS digital voice implementations.
+On iOS, an unmodified subset of the Codec2 sources (mode 1300 only) is vendored in
+ios-src/Codec2 and statically linked into the app.
 Codec2 is licensed under the GNU Lesser General Public License, version 2.1.
 The complete LGPL 2.1 license text is reproduced in the following shared license entry.
 

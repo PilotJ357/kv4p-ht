@@ -150,8 +150,16 @@ struct SettingsView: View {
                 SettingsValueRow(title: "Band",
                                  value: store.ble.hello.map { $0.rfModuleType == 0 ? "VHF" : "UHF" } ?? "–")
                 TxTimeoutRow(store: store)
+                if store.freeDvSupported {
+                    VoiceModeRow(store: store)
+                }
             } header: {
                 Text("Radio").foregroundStyle(t.label2)
+            } footer: {
+                if store.freeDvSupported {
+                    Text("FreeDV 2400B is digital voice. Both stations must use it. Memories can set their own voice mode.")
+                        .foregroundStyle(t.label2)
+                }
             }
             .settingsRowStyle(t)
 
@@ -274,6 +282,30 @@ private struct TXPowerRow: View {
             .disabled(!store.radio.hasHighLowPowerSwitch)
         } label: {
             Text("TX power")
+                .foregroundStyle(t.label)
+        }
+    }
+}
+
+// MARK: - Voice mode picker
+
+private struct VoiceModeRow: View {
+    @Environment(\.theme) var t
+    @Bindable var store: RadioStore
+
+    var body: some View {
+        LabeledContent {
+            Picker("Voice mode", selection: $store.freeDv2400b) {
+                Text("FM").tag(false)
+                Text("2400B").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 160)
+            // Switching codec mid-transmission would starve the TX watchdog.
+            .disabled(store.voicePTTKeyed)
+        } label: {
+            Text("Voice mode")
                 .foregroundStyle(t.label)
         }
     }

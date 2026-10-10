@@ -200,7 +200,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             let ptt = (state.flags & HOST_STATE_PTT_REQUESTED) != 0
             if self.demo == nil && ptt != self.transmitting {
                 if ptt {
-                    self.startTransmitting()
+                    self.startTransmitting(digital: (state.flags & HOST_STATE_FREEDV_2400B) != 0)
                 } else {
                     self.stopTransmitting()
                 }
@@ -238,20 +238,28 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         }
     }
 
-    private func startTransmitting() {
+    // FreeDV 2400B: one 7-byte Codec2 1300 frame per command. Firmware only
+    // accepts these in TX with HOST_STATE_FREEDV_2400B set, and drops 0x0C
+    // ADPCM while the flag is on.
+    private func sendTxDigital(_ codec2Frame: Data) {
+        gate.submit(buildKv4pVendorFrame(command: 0x0E, payload: codec2Frame))
+        txAudioFrameCount += 1
+    }
+
+    private func startTransmitting(digital: Bool) {
         guard !transmitting else { return }
         transmitting = true
         txAudioFrameCount = 0
         Task { [weak self] in
             guard let self else { return }
             await self.audio.stopMicCapture()
-            await self.audio.startMicCapture { [weak self] adpcmFrame in
+            await self.audio.startMicCapture(codec2: digital) { [weak self] frame in
                 guard let self else { return }
                 self.bleQueue.async {
-                    self.sendTxAudio(adpcmFrame)
+                    if digital { self.sendTxDigital(frame) } else { self.sendTxAudio(frame) }
                 }
             }
-            self.log("TX: mic capture started")
+            self.log(digital ? "TX: mic capture started (FreeDV 2400B)" : "TX: mic capture started")
         }
     }
 
@@ -501,7 +509,7 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         // A reused link can carry a stale firmware session's audio, window
         // and state frames before HELLO; they'd seed the controller and gate
         // with the wrong baseline.
-        if !helloReceived && (command == 0x0C || command == 0x09 || command == 0x0B) { return }
+        if !helloReceived && (command == 0x0C || command == 0x0E || command == 0x09 || command == 0x0B) { return }
 
         switch command {
         case 0x06:
@@ -523,6 +531,10 @@ class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                            s.peak, s.clips, Int(rssi),
                            radio.isSquelched ? "closed" : "OPEN"))
             }
+        case 0x0E:
+            // FreeDV 2400B voice; firmware only sends these past its own
+            // FreeDV squelch.
+            audio.feedCodec2Frame(Data(body))
         case 0x09:
             if let size = parseWindowUpdate(Data(body)) {
                 gate.enlargeWindow(by: Int(size))
