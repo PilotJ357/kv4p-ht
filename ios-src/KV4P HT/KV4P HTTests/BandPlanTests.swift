@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import KV4P_HT
 
@@ -171,6 +172,80 @@ struct BandPlanTests {
         // Real SA818 ranges don't trim the defaults.
         #expect(BandPlan.txLimits(rfModuleType: vhf, moduleRange: 134...174) == 144.0...148.0)
         #expect(BandPlan.txLimits(rfModuleType: uhf, moduleRange: 400...480) == 420.0...450.0)
+    }
+
+    private func reason(_ freq: Float, _ bw: UInt8 = DRA818_25K, module: UInt8 = vhf,
+                        limits: TxBandLimits = .defaults,
+                        moduleRange: ClosedRange<Float>? = nil) -> TxBlockReason? {
+        BandPlan.txBlockReason(onFrequency: freq, bandwidth: bw, rfModuleType: module,
+                               limits: limits, moduleRange: moduleRange)
+    }
+
+    @Test func blockReasons() {
+        #expect(reason(146.52) == nil)
+        #expect(reason(146.52, limits: region1) == .outsideBand(min: 144, max: 146))
+        #expect(reason(162.55) == .outsideBand(min: 144, max: 148))
+        #expect(reason(462.5625, module: uhf) == .outsideBand(min: 420, max: 450))
+        #expect(reason(147.995) == .bandEdge(148))
+        #expect(reason(144.005, DRA818_12K5) == .bandEdge(144))
+        #expect(reason(146.0, moduleRange: 150...174) == .noTxBand)
+        #expect(reason(146.0, limits: TxBandLimits(vhfMin: 148, vhfMax: 144, uhfMin: 420, uhfMax: 450)) == .noTxBand)
+        // Inside the plan but past what the module covers.
+        #expect(reason(147.5, moduleRange: 134...147) == .outsideRadioRange(min: 144, max: 147))
+        #expect(reason(146.9995, moduleRange: 134...147) == .bandEdge(147))
+        // Agrees with canTransmit.
+        for f: Float in [143.99, 144.0, 144.01, 146.52, 147.99, 148.0, 151.82, 162.55] {
+            for bw in [DRA818_25K, DRA818_12K5] {
+                #expect((reason(f, bw) == nil) == canTx(f, bw), "\(f) \(bw)")
+            }
+        }
+    }
+
+    @Test func blockReasonRangesDontWrap() {
+        let m = TxBlockReason.outsideBand(min: 144, max: 146).message(
+            txFreq: 146.52, rxFreq: 146.52, planLabel: "Japan, India",
+            moduleRange: nil, narrowFits: false)
+        #expect(m.hasSuffix("(Japan, India: 144\u{2060}–\u{2060}146\u{00A0}MHz)"))
+    }
+
+    @Test func blockReasonFixableInSettings() {
+        #expect(TxBlockReason.noTxBand.isBandPlan)
+        #expect(TxBlockReason.outsideBand(min: 144, max: 146).isBandPlan)
+        #expect(!TxBlockReason.outsideRadioRange(min: 144, max: 147).isBandPlan)
+        #expect(!TxBlockReason.bandEdge(148).isBandPlan)
+    }
+
+    @Test func blockReasonMessages() {
+        func msg(_ r: TxBlockReason, tx: Float, rx: Float? = nil, plan: String = "United States",
+                 range: ClosedRange<Float>? = 134...174, narrowFits: Bool = false) -> String {
+            r.message(txFreq: tx, rxFreq: rx ?? tx, planLabel: plan,
+                      moduleRange: range, narrowFits: narrowFits)
+                .replacingOccurrences(of: "\u{2060}", with: "")
+                .replacingOccurrences(of: "\u{00A0}", with: " ")
+        }
+        #expect(msg(.outsideBand(min: 144, max: 146), tx: 146.52, plan: "Japan, India")
+                == "Outside your TX band plan (Japan, India: 144–146 MHz)")
+        #expect(msg(.outsideBand(min: 144, max: 148), tx: 148.6, rx: 148.0)
+                == "Offset puts TX on 148.600, outside your band plan (United States: 144–148 MHz)")
+        #expect(msg(.outsideBand(min: 430, max: 440), tx: 446.0, plan: "Custom")
+                == "Outside your TX band plan (Custom: 430–440 MHz)")
+        #expect(msg(.bandEdge(148), tx: 147.995)
+                == "Signal would spill past the 148 MHz band edge")
+        #expect(msg(.bandEdge(148), tx: 147.99, narrowFits: true)
+                == "Signal would spill past the 148 MHz band edge; try 12.5 kHz bandwidth")
+        #expect(msg(.bandEdge(144), tx: 144.005, rx: 144.605)
+                == "TX on 144.005 would spill past the 144 MHz band edge")
+        #expect(msg(.noTxBand, tx: 146.0, range: 150...174)
+                == "Your TX band plan doesn't overlap this radio's 150–174 MHz range")
+        #expect(msg(.noTxBand, tx: 146.0, range: nil)
+                == "Your TX band plan has no transmit range for this radio")
+        #expect(msg(.outsideRadioRange(min: 144, max: 147), tx: 147.5)
+                == "Beyond this radio's 144–147 MHz transmit range")
+        #expect(msg(.outsideRadioRange(min: 144, max: 147), tx: 147.5, rx: 146.9)
+                == "Offset puts TX on 147.500, beyond this radio's 144–147 MHz transmit range")
+        // Fractional edges keep their decimals.
+        #expect(msg(.outsideBand(min: 144.025, max: 145.8), tx: 146.0, plan: "Custom")
+                == "Outside your TX band plan (Custom: 144.025–145.8 MHz)")
     }
 
     @Test func helloTuneRange() {

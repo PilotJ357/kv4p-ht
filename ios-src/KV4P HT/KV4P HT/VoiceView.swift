@@ -51,7 +51,8 @@ struct VoiceView: View {
             .padding(.bottom, 2)
 
             switch store.voiceMode {
-            case .vfo:  VFOBody(store: store, layout: stageLayout)
+            case .vfo:  VFOBody(store: store, layout: stageLayout,
+                                openSettings: { showSettings = true })
                             .dynamicTypeSize(...typeCap)
             case .scan: ScanBody(store: store)
             }
@@ -147,6 +148,7 @@ private struct VFOBody: View {
     @Environment(\.theme) var t
     @Bindable var store: RadioStore
     var layout: StageLayout
+    var openSettings: () -> Void
 
     var body: some View {
         // Memory match supplies only name/description; freq, offset, and
@@ -163,7 +165,8 @@ private struct VFOBody: View {
             tone:         store.currentToneString,
             modeLabel:    band,
             freqEditable: true,
-            layout:       layout
+            layout:       layout,
+            openSettings: openSettings
         )
     }
 }
@@ -183,6 +186,8 @@ private struct RadioStage: View {
     var modeLabel:    String
     var freqEditable: Bool = false
     var layout:       StageLayout = .regular
+    // Opens Settings (the TX band plan lives there).
+    var openSettings: () -> Void = {}
 
     private var compact: Bool { layout == .compact }
 
@@ -448,7 +453,9 @@ private struct RadioStage: View {
                         }
                     }
             }
-            if micDenied && !txBlocked {
+            if let message = store.rxOnlyMessage {
+                rxOnlyNote(message, fixInSettings: store.txBlockReason?.isBandPlan == true)
+            } else if micDenied {
                 Button(action: openAppSettings) {
                     Label("Open Settings", systemImage: "gear")
                         .font(.footnote.weight(.semibold))
@@ -457,6 +464,34 @@ private struct RadioStage: View {
                 .controlSize(.small)
                 .accessibilityHint("Allow microphone access to transmit voice")
             }
+        }
+    }
+
+    // Why PTT reads RX ONLY. When the band plan is the cause, tapping opens
+    // Settings, where the plan is picked.
+    @ViewBuilder
+    private func rxOnlyNote(_ message: String, fixInSettings: Bool) -> some View {
+        let note = Group {
+            if fixInSettings {
+                Text("\(message) \(Image(systemName: "chevron.right"))")
+            } else {
+                Text(message)
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(t.label2)
+        .multilineTextAlignment(.center)
+        .lineLimit(2)
+        .minimumScaleFactor(0.85)
+        .padding(.horizontal, 20)
+        .accessibilityLabel(message)
+
+        if fixInSettings {
+            Button(action: openSettings) { note }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens Settings to change the TX band plan")
+        } else {
+            note
         }
     }
 
@@ -516,7 +551,7 @@ struct PTTButton: View {
         return onAir ? "ON AIR" : "HOLD"
     }
     private var a11yLabel: String {
-        if rxOnly { return "Receive only: outside the amateur band" }
+        if rxOnly { return "Push to talk unavailable: receive only" }
         if noMic { return "Push to talk unavailable: microphone access denied" }
         return "Push to talk"
     }

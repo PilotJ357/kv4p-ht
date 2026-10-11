@@ -907,14 +907,29 @@ class RadioStore {
     // Where PTT would key (sendRadioState: VFO freq + offset) is outside the
     // amateur band, so the controller withholds TX_ALLOWED and PTT. Built
     // from observed state so the PTT button tracks it; false before HELLO.
-    var isTxOutOfBand: Bool {
-        guard let hello = ble.hello else { return false }
-        return !BandPlan.canTransmit(
+    var isTxOutOfBand: Bool { txBlockReason != nil }
+
+    var txBlockReason: TxBlockReason? {
+        txBlockReason(bandwidth: bandwidth == 0 ? DRA818_25K : DRA818_12K5)
+    }
+
+    private func txBlockReason(bandwidth bw: UInt8) -> TxBlockReason? {
+        guard let hello = ble.hello else { return nil }
+        return BandPlan.txBlockReason(
             onFrequency: currentFreq + vfoOffset,
-            bandwidth: bandwidth == 0 ? DRA818_25K : DRA818_12K5,
+            bandwidth: bw,
             rfModuleType: hello.rfModuleType,
             limits: txBandLimits,
             moduleRange: hello.tuneRange)
+    }
+
+    // Why it's RX ONLY, in a line for under the PTT button and APRS forms.
+    var rxOnlyMessage: String? {
+        guard let reason = txBlockReason else { return nil }
+        return reason.message(
+            txFreq: currentFreq + vfoOffset, rxFreq: currentFreq,
+            planLabel: txBandPlan.label, moduleRange: ble.hello?.tuneRange,
+            narrowFits: bandwidth == 0 && txBlockReason(bandwidth: DRA818_12K5) == nil)
     }
 
     // What a voice PTT press does right now. Demo Radio skips the mic and
