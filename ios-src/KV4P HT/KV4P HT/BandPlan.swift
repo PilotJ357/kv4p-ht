@@ -127,10 +127,91 @@ nonisolated enum BandPlan {
     static func canTransmit(onFrequency freq: Float, bandwidth: UInt8, rfModuleType: UInt8,
                             limits: TxBandLimits = .defaults,
                             moduleRange: ClosedRange<Float>? = nil) -> Bool {
+        txBlockReason(onFrequency: freq, bandwidth: bandwidth, rfModuleType: rfModuleType,
+                      limits: limits, moduleRange: moduleRange) == nil
+    }
+
+    /// Why `canTransmit` refuses `freq`; nil when TX is allowed.
+    static func txBlockReason(onFrequency freq: Float, bandwidth: UInt8, rfModuleType: UInt8,
+                              limits: TxBandLimits = .defaults,
+                              moduleRange: ClosedRange<Float>? = nil) -> TxBlockReason? {
         guard let band = txLimits(rfModuleType: rfModuleType, limits: limits,
-                                  moduleRange: moduleRange) else { return false }
+                                  moduleRange: moduleRange) else { return .noTxBand }
+        guard band.contains(freq) else {
+            // Inside the plan but past the module's range is the radio's
+            // limit, not the plan's (tuning there is normally refused anyway).
+            let plan = limits.bounds(rfModuleType: rfModuleType)
+            return freq >= plan.min && freq <= plan.max
+                ? .outsideRadioRange(min: band.lowerBound, max: band.upperBound)
+                : .outsideBand(min: plan.min, max: plan.max)
+        }
         let half = halfBandwidthMhz(bandwidth)
-        return freq >= band.lowerBound + half && freq <= band.upperBound - half
+        if freq < band.lowerBound + half { return .bandEdge(band.lowerBound) }
+        if freq > band.upperBound - half { return .bandEdge(band.upperBound) }
+        return nil
+    }
+}
+
+/// Why a TX frequency is receive only (RX ONLY on the PTT button).
+nonisolated enum TxBlockReason: Equatable, Sendable {
+    /// The TX band limits are empty or miss the module's tuning range, so
+    /// nothing the module tunes is transmittable.
+    case noTxBand
+    /// Carrier outside the band plan's edges (MHz).
+    case outsideBand(min: Float, max: Float)
+    /// Carrier inside the plan but outside the part of it the module can
+    /// transmit on (MHz).
+    case outsideRadioRange(min: Float, max: Float)
+    /// Carrier inside the band, but the emission at this bandwidth would
+    /// cross the given edge (MHz).
+    case bandEdge(Float)
+
+    /// The user can fix it by picking another TX band plan.
+    var isBandPlan: Bool {
+        switch self {
+        case .noTxBand, .outsideBand: true
+        case .outsideRadioRange, .bandEdge: false
+        }
+    }
+
+    /// One-line explanation under the RX ONLY button. `txFreq` differs from
+    /// `rxFreq` when a repeater offset is set; `narrowFits` says 12.5 kHz
+    /// bandwidth would clear a band edge.
+    func message(txFreq: Float, rxFreq: Float, planLabel: String,
+                 moduleRange: ClosedRange<Float>?, narrowFits: Bool) -> String {
+        let offsetTx = abs(txFreq - rxFreq) >= 0.0005
+        let tx = String(format: "%.3f", txFreq)
+        switch self {
+        case .noTxBand:
+            guard let r = moduleRange else {
+                return "Your TX band plan has no transmit range for this radio"
+            }
+            return "Your TX band plan doesn't overlap this radio's \(Self.mhz(r.lowerBound, r.upperBound)) range"
+        case .outsideBand(let lo, let hi):
+            let plan = "\(planLabel): \(Self.mhz(lo, hi))"
+            return offsetTx
+                ? "Offset puts TX on \(tx), outside your band plan (\(plan))"
+                : "Outside your TX band plan (\(plan))"
+        case .outsideRadioRange(let lo, let hi):
+            let range = Self.mhz(lo, hi)
+            return offsetTx
+                ? "Offset puts TX on \(tx), beyond this radio's \(range) transmit range"
+                : "Beyond this radio's \(range) transmit range"
+        case .bandEdge(let edge):
+            let what = offsetTx ? "TX on \(tx)" : "Signal"
+            let base = "\(what) would spill past the \(Self.mhz(edge)) band edge"
+            return narrowFits ? base + "; try 12.5 kHz bandwidth" : base
+        }
+    }
+
+    // "144 MHz", "430.5 MHz": no trailing zeros. A no-break space and word
+    // joiners keep a value or range from wrapping mid-way.
+    private static func mhz(_ f: Float) -> String {
+        String(format: "%g\u{00A0}MHz", f)
+    }
+
+    private static func mhz(_ lo: Float, _ hi: Float) -> String {
+        String(format: "%g\u{2060}–\u{2060}%g\u{00A0}MHz", lo, hi)
     }
 }
 

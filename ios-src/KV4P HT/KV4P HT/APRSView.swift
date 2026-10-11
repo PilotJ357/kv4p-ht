@@ -477,8 +477,8 @@ struct APRSComposeView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Leave the recipient blank to send a CQ bulletin. Messages are sent on the current frequency.")
                         .foregroundStyle(t.label2)
-                    if store.isTxOutOfBand {
-                        Text("Current frequency is outside the amateur band — receive only.")
+                    if let rxOnly = store.rxOnlyMessage {
+                        Text("Current frequency is receive only. \(rxOnly).")
                             .foregroundStyle(t.red)
                     } else if sendFailed {
                         Text("Couldn't send — check connection and callsign.")
