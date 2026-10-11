@@ -30,7 +30,8 @@ let package = Package(
         .testTarget(
             name: "Codec2SwiftTests",
             dependencies: ["Codec2Swift"],
-            path: "Tests/Codec2SwiftTests"
+            path: "Tests/Codec2SwiftTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
