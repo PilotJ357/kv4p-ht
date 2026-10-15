@@ -122,10 +122,11 @@ struct SettingsView: View {
                           options: aprsFrequencies,
                           labels: aprsFrequencyLabels)
                 SettingsToggle(title: "Silence audio on APRS freq", isOn: $store.silenceRxOnAprsFreq)
+                SettingsToggle(title: "Digipeat packets", isOn: $store.aprsDigipeatEnabled)
             } header: {
                 Text("APRS").foregroundStyle(t.label2)
             } footer: {
-                Text("APRS packets are decoded regardless of squelch. Silencing mutes RX audio while tuned to your APRS frequency so you don't hear packet noise.")
+                Text("APRS packets are decoded regardless of squelch. Silencing mutes RX audio while tuned to your APRS frequency so you don't hear packet noise.\n\nDigipeat packets makes this radio a fill-in digipeater: packets whose next hop is WIDE1-1 or your callsign are retransmitted with your callsign on the simplex frequency they were heard on, once squelch closes. Each packet is repeated at most once, and your own packets never are.")
                     .foregroundStyle(t.label2)
             }
             .settingsRowStyle(t)

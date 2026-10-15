@@ -120,6 +120,8 @@ class APRSController {
     @ObservationIgnored private var beaconDeferTimer: Timer?
     @ObservationIgnored private var beaconGate = BeaconDeferGate()
     @ObservationIgnored private var retryTimer: Timer?
+    @ObservationIgnored private var digipeater = APRSDigipeater()
+    @ObservationIgnored private var digipeatTask: Task<Void, Never>?
     @ObservationIgnored private var messageNumber: Int
     // Real counter parked while demo messages draw from a scratch copy.
     @ObservationIgnored private var realMessageNumber: Int?
@@ -156,6 +158,7 @@ class APRSController {
     func beginDemoSession() {
         guard !isDemoSession else { return }
         sessionGeneration &+= 1
+        resetDigipeater()
         realMessageNumber = messageNumber
         persistence = APRSPersistence(inMemory: true)
         entries = []
@@ -164,6 +167,7 @@ class APRSController {
     func endDemoSession() {
         guard let saved = realMessageNumber else { return }
         sessionGeneration &+= 1
+        resetDigipeater()
         realMessageNumber = nil
         messageNumber = saved
         persistence = realPersistence
@@ -225,6 +229,7 @@ class APRSController {
         guard let frame = AX25Frame(decoding: data) else { return }
 
         let now = Date()
+        considerDigipeat(frame, now: now)
         var from = frame.source.display
         var to = frame.destination.display
         var info = parseMicEPayload(frame.payload, destCall: frame.destination.base)
@@ -450,15 +455,21 @@ class APRSController {
 
     @discardableResult
     private func transmitPayload(_ payload: String, simplexFrequency: Float? = nil) -> Bool {
-        guard let store, let me = myCallsign else { return false }
-        let frame = AX25Frame(source: me, payload: Data(payload.utf8))
+        guard let me = myCallsign else { return false }
+        return transmitFrame(AX25Frame(source: me, payload: Data(payload.utf8)),
+                             simplexFrequency: simplexFrequency)
+    }
+
+    @discardableResult
+    private func transmitFrame(_ frame: AX25Frame, simplexFrequency: Float? = nil) -> Bool {
+        guard let store else { return false }
         let raw = frame.encodedWithoutFCS()
         store.ble.sendAx25Frame(raw, simplexFrequency: simplexFrequency)
         let info = parseAPRSPayload(frame.payload)
         let (kind, msgNum) = Self.frameIdentity(of: info)
         persistence.insertFrame(
             direction: "out", raw: raw, frameHash: APRSPersistence.frameHash(of: raw),
-            source: me.display, destination: frame.destination.display,
+            source: frame.source.display, destination: frame.destination.display,
             payload: frame.payload, kind: kind, msgNum: msgNum, timestamp: Date())
         return true
     }
@@ -508,6 +519,60 @@ class APRSController {
             kind: kind, text: outText, timestamp: Date(), msgNum: num,
             nextRetryAt: nextRetryAt, isOutgoing: true))
         return true
+    }
+
+    // MARK: - Digipeating
+
+    // How often a queued digipeat re-checks for a clear channel.
+    private static let digipeatPollInterval: Duration = .milliseconds(500)
+
+    func resetDigipeater() {
+        digipeater.reset()
+        digipeatTask?.cancel()
+        digipeatTask = nil
+    }
+
+    // Simplex channel the radio is receiving on, if we may digipeat there.
+    // A split channel would mean transmitting on a repeater's output, so
+    // digipeats only go out where the TX and RX frequencies match.
+    private func digipeatFrequency() -> Float? {
+        guard let store, store.aprsDigipeatEnabled, !isDemoSession,
+              !store.isScanning, !store.isSimplexFrequencySwitchActive,
+              canTransmit(), let ds = store.ble.deviceState,
+              abs(ds.freqTx - ds.freqRx) < 0.0005,
+              store.radio.canTransmit(onFrequency: ds.freqRx)
+        else { return nil }
+        return ds.freqRx
+    }
+
+    private func considerDigipeat(_ frame: AX25Frame, now: Date) {
+        guard let me = myCallsign, let freq = digipeatFrequency() else { return }
+        guard digipeater.receive(frame, myCall: me, frequency: freq, now: now) else { return }
+        guard digipeatTask == nil else { return }
+        digipeatTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.digipeatPollInterval)
+                guard let self, !Task.isCancelled else { return }
+                if !self.processPendingDigipeats() { break }
+            }
+            self?.digipeatTask = nil
+        }
+    }
+
+    // Sends at most one queued digipeat per tick. Returns false once the
+    // queue is empty.
+    private func processPendingDigipeats(now: Date = Date()) -> Bool {
+        guard let store else { return false }
+        let clear = APRSDigipeater.isChannelClear(
+            squelchLevel: store.radio.desiredSquelch, squelched: store.isSquelched)
+        if let item = digipeater.next(now: now, channelClear: clear) {
+            // Conditions can change while waiting (retune, link drop, toggle
+            // off); only send on the frequency the packet was heard on.
+            if let freq = digipeatFrequency(), abs(freq - item.frequency) < 0.0005 {
+                transmitFrame(item.frame)
+            }
+        }
+        return !digipeater.pending.isEmpty
     }
 
     // MARK: - Message retry (decay algorithm)
